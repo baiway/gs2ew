@@ -1,0 +1,7 @@
+[project]
+name = "gs2ew"
+version = "0.1.0"
+description = "Hodge-podge of analysis scripts for the gyrokinetic code GS2."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
