@@ -12,3 +12,6 @@ wheels/
 # Python version specification excluded as each  cluster may have different
 # versions available
 .python-version
+
+# Output files and plots
+outputs/
