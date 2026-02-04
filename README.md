@@ -33,6 +33,6 @@ source .venv/bin/activate  # On macOS/Linux
 ## To-do
 - [x] Implement basic check for saturation. See [`detect_saturation_time`](https://github.com/baiway/gs2ew/blob/main/src/gs2ew/utils/gs2_output.py)
 - [x] Plot time traces for each enabled field. See [`plot_fields_time_traces`](https://github.com/baiway/gs2ew/blob/main/src/gs2ew/postprocess/fields.py)
-- [x] Plot $k_x$-$k_y$ spectra of each enabled field for last time step. See [`plot_fields_by_mode`](https://github.com/baiway/gs2ew/blob/main/src/gs2ew/postprocess/fields.py)
-- [x] Plot poloidal structure of each enabled transfer diagnostic
+- [x] Plot fields by mode $(k_x, k_y)$ for the last time step. See [`plot_fields_by_mode`](https://github.com/baiway/gs2ew/blob/main/src/gs2ew/postprocess/fields.py)
+- [x] Plot poloidal structure of each enabled transfer diagnostic. See [`plot_transfer_by_theta`](https://github.com/baiway/gs2ew/blob/main/src/gs2ew/postprocess/transfer.py) and [`plot_transfer_by_theta_averaged`](https://github.com/baiway/gs2ew/blob/main/src/gs2ew/postprocess/transfer.py)
 - [ ] Plot time traces of the transfer for each target $k_x$
