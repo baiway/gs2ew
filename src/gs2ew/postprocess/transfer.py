@@ -83,8 +83,8 @@ def plot_transfer_by_theta(
 
 def plot_transfer_by_theta_averaged(
     ds: xr.Dataset,
-    tstart: float,
     window: float,
+    tstart: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
 ) -> Path:
@@ -95,10 +95,11 @@ def plot_transfer_by_theta_averaged(
     ----------
     ds : xarray.Dataset
         GS2 output dataset (loaded from `.out.nc` file)
-    tstart : float
-        Start time for the averaging window.
     window : float
         Duration of the averaging window.
+    tstart : float, optional
+        Start time for the averaging window. If None, uses the last `window`
+        time units (i.e., tstart = t[-1] - window).
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is "outputs".
     filename : str, optional
@@ -117,6 +118,10 @@ def plot_transfer_by_theta_averaged(
         "entropy_transfer_bpar_theta",
     ]
     enabled_diagnostics = [d for d in all_diags if d in ds]
+
+    # If tstart not provided, use the last `window` time units
+    if tstart is None:
+        tstart = float(ds["t"].values[-1]) - window
 
     tend = tstart + window
 
