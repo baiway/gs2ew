@@ -80,6 +80,8 @@ def plot_fields_time_traces(
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
+    print(f"Saved {output_path}")
+
     return output_path
 
 
@@ -151,5 +153,7 @@ def plot_fields_by_mode(
     output_path = output_dir / filename
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+    print(f"Saved {output_path}")
 
     return output_path
