@@ -1,10 +1,13 @@
 # gs2ew
+
 Hodge-podge of SLURM and post-processing scripts for the gyrokinetic code [GS2](https://bitbucket.org/gyrokinetics/gs2). These scripts are for my own personal use during my PhD and are in no way "official" or "recommeded" by the GS2 team.
 
 ## Installation
+
 This project uses [`uv`](https://docs.astral.sh/uv/) for Python dependency management.
 
 ### Install `uv`
+
 On macOS and Linux:
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -16,6 +19,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 ```
 
 ### Install `gs2ew`
+
 Clone the repository and install:
 ```bash
 git clone https://github.com/baiway/gs2ew.git
@@ -30,9 +34,24 @@ source .venv/bin/activate  # On macOS/Linux
 .venv\Scripts\activate  # On Windows
 ```
 
-## To-do
-- [x] Implement basic check for saturation. See [`detect_saturation_time`](https://github.com/baiway/gs2ew/blob/main/src/gs2ew/utils/gs2_output.py)
-- [x] Plot time traces for each enabled field. See [`plot_fields_time_traces`](https://github.com/baiway/gs2ew/blob/main/src/gs2ew/postprocess/fields.py)
-- [x] Plot fields by mode $(k_x, k_y)$ for the last time step. See [`plot_fields_by_mode`](https://github.com/baiway/gs2ew/blob/main/src/gs2ew/postprocess/fields.py)
-- [x] Plot poloidal structure of each enabled transfer diagnostic. See [`plot_transfer_by_theta`](https://github.com/baiway/gs2ew/blob/main/src/gs2ew/postprocess/transfer.py) and [`plot_transfer_by_theta_averaged`](https://github.com/baiway/gs2ew/blob/main/src/gs2ew/postprocess/transfer.py)
-- [ ] Plot time traces of the transfer for each target $k_x$
+## Usage
+
+You can specify the `.out.nc` file, the plots to produce, and the output directory in
+a Python file. A template is provided in [`examples/analysis.py`](examples/analysis.py).
+
+Copy it, set `NC_FILE` and `OUTPUT_DIR` at the top, comment in or out the
+plots you want, then run:
+
+```bash
+python analysis.py
+```
+
+or, without activating the virtual environment:
+
+```bash
+uv run analysis.py
+```
+
+Plots are saved to `OUTPUT_DIR` (default: `outputs/`). Movie functions also
+save individual frames to a `<name>_frames/` subdirectory alongside the
+`.mp4` file.
