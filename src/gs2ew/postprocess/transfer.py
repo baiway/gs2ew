@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from pathlib import Path
 
-from gs2ew.utils.gs2_output import detect_saturation_time
+from gs2ew.utils.gs2_output import detect_saturation_time as _detect_saturation_time
 
 def plot_transfer_by_theta(
     ds: xr.Dataset,
@@ -14,6 +14,7 @@ def plot_transfer_by_theta(
     tstart: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
+    _quiet: bool = False,
 ) -> Path:
     """Plots the poloidal structure of each enabled transfer diagnostic.
 
@@ -102,4 +103,158 @@ def plot_transfer_by_theta(
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
+    if not _quiet:
+        print(f"Saved {output_path}")
+    return output_path
+
+
+def plot_transfer_by_theta_movie(
+    ds: xr.Dataset,
+    window: float | None = None,
+    tstart: float | None = None,
+    output_dir: str | Path = "outputs",
+    filename: str | None = None,
+    fps: int = 10,
+    crf: int = 18,
+    verbose: bool = False,
+) -> Path:
+    """Creates a movie of the poloidal structure of each enabled transfer
+    diagnostic over time.
+
+    Frames are saved individually to a subdirectory of `output_dir`, then
+    stitched into a video with ffmpeg. To avoid exhausting memory on large
+    datasets (tens of gigabytes), `ds` should be opened lazily via
+    ``xr.open_dataset`` (the default) rather than ``xr.load_dataset``, so
+    that only the data required for each frame is read from disk at a time.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        GS2 output dataset (loaded from `.out.nc` file). Must be lazily
+        loaded to keep memory usage bounded.
+    window : float, optional
+        Duration of the averaging window. If provided, each frame shows
+        the rolling average over `window` time units starting at that
+        frame's time. If omitted, each frame shows the instantaneous
+        transfer.
+    tstart : float, optional
+        Start time for the movie; frames before this time are skipped. If not
+        provided, the saturation time is detected automatically via
+        ``detect_saturation_time``. If saturation cannot be detected, falls
+        back to the first timestep with a warning.
+    output_dir : str or Path, optional
+        Directory where the movie and frame images are saved.
+        Default is "outputs".
+    filename : str, optional
+        Filename for the output movie. If None, uses
+        "transfer_by_theta_movie.mp4".
+    fps : int, optional
+        Frames per second for the output movie. Default is 10.
+    crf : int, optional
+        Constant Rate Factor for libx264 (0 = lossless, 51 = worst quality).
+        Lower values give higher quality at the cost of larger files. Default
+        is 18, which is visually near-lossless for scientific plots and
+        significantly smaller than the libx264 default of 23.
+    verbose : bool, optional
+        If True, prints the total frame count before rendering begins and
+        logs progress after each frame. Default is False.
+
+    Returns
+    -------
+    Path
+        Path to the saved movie file.
+
+    Raises
+    ------
+    ValueError
+        If no valid frames exist for the given parameters.
+    """
+    import imageio
+
+    if tstart is None:
+        tstart = _detect_saturation_time(ds)
+        if np.isnan(tstart):
+            print("Warning: saturation time could not be detected; starting movie from t[0].")
+            tstart = float(ds["t"].values[0])
+        else:
+            print(f"Using detected saturation time tstart = {tstart:.2f}")
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if filename is None:
+        filename = "transfer_by_theta_movie.mp4"
+
+    frames_dir = output_dir / (Path(filename).stem + "_frames")
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    t_values = ds["t"].values
+
+    # Build a boolean mask over all timesteps to select valid frame times.
+    # Start with all timesteps included, then narrow down.
+    mask = np.ones(len(t_values), dtype=bool)
+
+    # Skip frames before the requested start time.
+    if tstart is not None:
+        mask &= t_values >= tstart
+
+    # For averaged frames, only include timesteps where a full window
+    # [t, t + window] fits within the data — partial windows are excluded.
+    if window is not None:
+        mask &= t_values + window <= float(t_values[-1])
+
+    frame_indices = np.nonzero(mask)[0]
+
+    if len(frame_indices) == 0:
+        raise ValueError("No valid intervals found for the given `tstart` and `window`.")
+
+    n_frames = len(frame_indices)
+    if verbose:
+        print(f"Generating {n_frames} frames...")
+
+    # Produce frames
+    for frame_num, t_idx in enumerate(frame_indices):
+        frame_filename = f"frame_{frame_num:06d}.png"
+        if window is not None:
+            plot_transfer_by_theta(
+                ds,
+                window=window,
+                tstart=float(t_values[t_idx]),
+                output_dir=frames_dir,
+                filename=frame_filename,
+                _quiet=True,
+            )
+        else:
+            # Pass a single-timestep lazy slice; isel(t=-1) inside
+            # plot_transfer_by_theta will select the only timestep.
+            plot_transfer_by_theta(
+                ds.isel(t=slice(t_idx, t_idx + 1)),
+                output_dir=frames_dir,
+                filename=frame_filename,
+                _quiet=True,
+            )
+        if verbose:
+            print(f"  Frame {frame_num + 1}/{n_frames}")
+
+    # Stitch frames into a video.
+    output_path = output_dir / filename
+    with imageio.get_writer(
+        str(output_path),
+        fps=fps,
+        # H.264: universally supported by browsers, media players, and OSes.
+        codec="libx264",
+        # yuv420p is required for H.264 compatibility. Without it, libx264
+        # defaults to yuv444p, which most players (including QuickTime) cannot
+        # decode. The matplotlib PNGs are RGB; ffmpeg converts them on the fly.
+        pixelformat="yuv420p",
+        # crf controls quality vs. file size (0 = lossless, 51 = worst).
+        # preset=slow gets better compression at the same quality by spending
+        # more CPU time — a worthwhile trade since frame generation dominates
+        # the overall runtime.
+        output_params=["-crf", str(crf), "-preset", "slow"],
+    ) as writer:
+        for frame_path in sorted(frames_dir.glob("frame_*.png")):
+            writer.append_data(imageio.imread(str(frame_path)))
+
+    print(f"Saved {output_path}")
     return output_path
