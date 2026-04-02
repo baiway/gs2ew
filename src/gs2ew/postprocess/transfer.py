@@ -9,6 +9,82 @@ from pathlib import Path
 from gs2ew.utils.gs2_output import detect_saturation_time as _detect_saturation_time
 from gs2ew.utils.weights import get_weights
 
+
+def _resolve_frame_indices(
+    ds: xr.Dataset,
+    tstart: float | None,
+    window: float | None,
+) -> np.ndarray:
+    """Resolve `tstart` and return the array of valid frame time indices.
+
+    If `tstart` is None, attempts to detect the saturation time via
+    `detect_saturation_time`. Falls back to `t[0]` with a warning if
+    detection fails (e.g. `phi2` is absent from `ds`).
+
+    Excludes timesteps before `tstart` and, when `window` is given, any
+    timestep where a full window `[t, t + window]` would exceed the data.
+
+    Raises `ValueError` if no valid frames remain after filtering.
+    """
+    t_values = ds["t"].values
+
+    if tstart is None:
+        try:
+            tstart = _detect_saturation_time(ds)
+            if np.isnan(tstart):
+                raise ValueError
+            print(f"Using detected saturation time tstart = {tstart:.2f}")
+        except (KeyError, ValueError):
+            print("Warning: saturation time could not be detected; starting movie from t[0].")
+            tstart = float(t_values[0])
+
+    # Build a boolean mask over all timesteps to select valid frame times.
+    # Start with all timesteps included, then narrow down.
+    mask = np.ones(len(t_values), dtype=bool)
+
+    # Skip frames before the requested start time.
+    mask &= t_values >= tstart
+
+    # For averaged frames, only include timesteps where a full window
+    # [t, t + window] fits within the data — partial windows are excluded.
+    if window is not None:
+        mask &= t_values + window <= float(t_values[-1])
+
+    frame_indices = np.nonzero(mask)[0]
+
+    if len(frame_indices) == 0:
+        raise ValueError("No valid frames found for the given `tstart` and `window`.")
+
+    return frame_indices
+
+
+def _stitch_frames_to_movie(
+    frames_dir: Path,
+    output_path: Path,
+    fps: int,
+    crf: int,
+) -> None:
+    """Stitch PNG frames in `frames_dir` into an H.264 MP4 at `output_path`."""
+    import imageio
+
+    with imageio.get_writer(
+        str(output_path),
+        fps=fps,
+        # H.264: universally supported by browsers, media players, and OSes.
+        codec="libx264",
+        # yuv420p is required for H.264 compatibility. Without it, libx264
+        # defaults to yuv444p, which most players (including QuickTime) cannot
+        # decode. The matplotlib PNGs are RGB; ffmpeg converts them on the fly.
+        pixelformat="yuv420p",
+        # crf controls quality vs. file size (0 = lossless, 51 = worst).
+        # preset=slow gets better compression at the same quality by spending
+        # more CPU time — a worthwhile trade since frame generation dominates
+        # the overall runtime.
+        output_params=["-crf", str(crf), "-preset", "slow"],
+    ) as writer:
+        for frame_path in sorted(frames_dir.glob("frame_*.png")):
+            writer.append_data(imageio.imread(str(frame_path)))
+
 def plot_transfer_by_theta(
     ds: xr.Dataset,
     window: float | None = None,
@@ -170,15 +246,7 @@ def plot_transfer_by_theta_movie(
     ValueError
         If no valid frames exist for the given parameters.
     """
-    import imageio
-
-    if tstart is None:
-        tstart = _detect_saturation_time(ds)
-        if np.isnan(tstart):
-            print("Warning: saturation time could not be detected; starting movie from t[0].")
-            tstart = float(ds["t"].values[0])
-        else:
-            print(f"Using detected saturation time tstart = {tstart:.2f}")
+    frame_indices = _resolve_frame_indices(ds, tstart, window)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -191,24 +259,6 @@ def plot_transfer_by_theta_movie(
 
     t_values = ds["t"].values
 
-    # Build a boolean mask over all timesteps to select valid frame times.
-    # Start with all timesteps included, then narrow down.
-    mask = np.ones(len(t_values), dtype=bool)
-
-    # Skip frames before the requested start time.
-    if tstart is not None:
-        mask &= t_values >= tstart
-
-    # For averaged frames, only include timesteps where a full window
-    # [t, t + window] fits within the data — partial windows are excluded.
-    if window is not None:
-        mask &= t_values + window <= float(t_values[-1])
-
-    frame_indices = np.nonzero(mask)[0]
-
-    if len(frame_indices) == 0:
-        raise ValueError("No valid intervals found for the given `tstart` and `window`.")
-
     n_frames = len(frame_indices)
     if verbose:
         print(f"Generating {n_frames} frames...")
@@ -217,7 +267,7 @@ def plot_transfer_by_theta_movie(
     for frame_num, t_idx in enumerate(frame_indices):
         frame_filename = f"frame_{frame_num:06d}.png"
         if window is not None:
-            plot_transfer_by_theta(
+            _ = plot_transfer_by_theta(
                 ds,
                 window=window,
                 tstart=float(t_values[t_idx]),
@@ -239,53 +289,38 @@ def plot_transfer_by_theta_movie(
 
     # Stitch frames into a video.
     output_path = output_dir / filename
-    with imageio.get_writer(
-        str(output_path),
-        fps=fps,
-        # H.264: universally supported by browsers, media players, and OSes.
-        codec="libx264",
-        # yuv420p is required for H.264 compatibility. Without it, libx264
-        # defaults to yuv444p, which most players (including QuickTime) cannot
-        # decode. The matplotlib PNGs are RGB; ffmpeg converts them on the fly.
-        pixelformat="yuv420p",
-        # crf controls quality vs. file size (0 = lossless, 51 = worst).
-        # preset=slow gets better compression at the same quality by spending
-        # more CPU time — a worthwhile trade since frame generation dominates
-        # the overall runtime.
-        output_params=["-crf", str(crf), "-preset", "slow"],
-    ) as writer:
-        for frame_path in sorted(frames_dir.glob("frame_*.png")):
-            writer.append_data(imageio.imread(str(frame_path)))
+    _stitch_frames_to_movie(frames_dir, output_path, fps=fps, crf=crf)
 
     print(f"Saved {output_path}")
     return output_path
 
 
 def plot_vel_transfer_by_theta_by_sign(
-    ds_vel: xr.Dataset,
+    ds: xr.Dataset,
     grids_nc: str | Path | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
+    _quiet: bool = False,
 ) -> Path:
     """Plot the poloidal structure of the velocity-resolved entropy transfer,
     integrated over velocity space.
 
-    Each enabled velocity-resolved diagnostic in `ds_vel` is weighted by the
+    Each enabled velocity-resolved diagnostic in `ds` is weighted by the
     velocity-space integration weights `wl(lambda, theta)` and
     `w(species, egrid)` before summing over all non-theta dimensions except
-    `sign`. The two parallel-velocity directions (sign=1: $v_\parallel > 0$,
-    sign=2: $v_\parallel < 0$) are plotted as separate curves (solid and
+    `sign`. The two parallel-velocity directions (sign=1: vpa > 0,
+    sign=2: vpa < 0) are plotted as separate curves (solid and
     dashed respectively) on the same axis.
 
     Parameters
     ----------
-    ds_vel : xarray.Dataset
+    ds : xarray.Dataset
         Velocity-resolved transfer dataset. Expected to contain one or more
         of the diagnostics listed below, each with dims
         `(species, sign, lambda, egrid, theta, kxt_shift)`.
     grids_nc : str or Path, optional
         Path to a `.grids.nc` file produced by `dump_grids`. Used to load
-        `wl` and `w` if they are absent from `ds_vel`.
+        `wl` and `w` if they are absent from `ds`.
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is `"outputs"`.
     filename : str, optional
@@ -299,14 +334,14 @@ def plot_vel_transfer_by_theta_by_sign(
     Raises
     ------
     MissingWeightsError
-        If `wl` and `w` cannot be found in `ds_vel` or `grids_nc`.
+        If `wl` and `w` cannot be found in `ds` or `grids_nc`.
     """
     all_diags = [
         "entropy_transfer_phi_velocity",
         "entropy_transfer_apar_velocity",
         "entropy_transfer_bpar_velocity",
     ]
-    enabled_diagnostics = [d for d in all_diags if d in ds_vel]
+    enabled_diagnostics = [d for d in all_diags if d in ds]
 
     labels = {
         "entropy_transfer_phi_velocity":  r"$T_{S,\phi}^\text{ZF}$",
@@ -314,7 +349,7 @@ def plot_vel_transfer_by_theta_by_sign(
         "entropy_transfer_bpar_velocity": r"$T_{S,B_\parallel}^\text{ZF}$",
     }
 
-    weights = get_weights(ds_vel, grids_nc=grids_nc)
+    weights = get_weights(ds, grids_nc=grids_nc)
     wl = weights["wl"]  # dims (lambda, theta)
     w = weights["w"]    # dims (species, egrid)
 
@@ -324,8 +359,8 @@ def plot_vel_transfer_by_theta_by_sign(
     if filename is None:
         filename = "vel_transfer_by_theta.png"
 
-    theta = ds_vel["theta"].values
-    sign_values = ds_vel["sign"].values
+    theta = ds["theta"].values
+    sign_values = ds["sign"].values
 
     # sign=1 → v_∥ > 0 (solid), sign=2 → v_∥ < 0 (dashed)
     sign_styles = {sign_values[0]: "-", sign_values[1]: "--"}
@@ -341,7 +376,7 @@ def plot_vel_transfer_by_theta_by_sign(
             # Multiply by velocity-space weights, then sum over all non-theta
             # dimensions (excluding sign) to obtain the theta-dependent transfer.
             transfer = (
-                ds_vel[diag].sel(sign=s) * wl * w
+                ds[diag].sel(sign=s) * wl * w
             ).sum(dim=["species", "lambda", "egrid", "kxt_shift"])
 
             ax.plot(theta, transfer.values, linewidth=1.5,
@@ -357,6 +392,106 @@ def plot_vel_transfer_by_theta_by_sign(
     output_path = output_dir / filename
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+    if not _quiet:
+        print(f"Saved {output_path}")
+    return output_path
+
+
+def plot_vel_transfer_by_theta_by_sign_movie(
+    ds: xr.Dataset,
+    grids_nc: str | Path | None = None,
+    tstart: float | None = None,
+    window: float | None = None,
+    output_dir: str | Path = "outputs",
+    filename: str | None = None,
+    fps: int = 10,
+    crf: int = 18,
+    verbose: bool = False,
+) -> Path:
+    """Creates a movie of `plot_vel_transfer_by_theta_by_sign` over time.
+
+    Frames are saved individually to a subdirectory of `output_dir`, then
+    stitched into a video. `ds` must contain a `t` coordinate (i.e. the
+    full time-trace file, not a single-snapshot slice).
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Velocity-resolved transfer dataset with a `t` coordinate.
+    grids_nc : str or Path, optional
+        Path to a `.grids.nc` file produced by `dump_grids`. Used to load
+        `wl` and `w` if they are absent from `ds`.
+    tstart : float, optional
+        Start time for the movie; frames before this time are skipped. If not
+        provided, the saturation time is detected automatically from `ds`
+        (requires `phi2` to be present). Falls back to `t[0]` with a warning
+        if detection fails.
+    window : float, optional
+        Duration of the averaging window. If provided, each frame shows the
+        rolling average over `window` time units starting at that frame's
+        time. If omitted, each frame shows the instantaneous transfer.
+    output_dir : str or Path, optional
+        Directory where the movie and frame images are saved.
+        Default is `"outputs"`.
+    filename : str, optional
+        Filename for the output movie. If None, uses
+        `"vel_transfer_by_theta_by_sign_movie.mp4"`.
+    fps : int, optional
+        Frames per second. Default is 10.
+    crf : int, optional
+        libx264 Constant Rate Factor (0 = lossless, 51 = worst). Default
+        is 18.
+    verbose : bool, optional
+        If True, prints frame count and per-frame progress. Default is False.
+
+    Returns
+    -------
+    Path
+        Path to the saved movie file.
+
+    Raises
+    ------
+    ValueError
+        If no valid frames exist for the given `tstart` and `window`.
+    """
+    frame_indices = _resolve_frame_indices(ds, tstart, window)
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if filename is None:
+        filename = "vel_transfer_by_theta_by_sign_movie.mp4"
+
+    frames_dir = output_dir / (Path(filename).stem + "_frames")
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    t_values = ds["t"].values
+
+    n_frames = len(frame_indices)
+    if verbose:
+        print(f"Generating {n_frames} frames...")
+
+    for frame_num, t_idx in enumerate(frame_indices):
+        frame_filename = f"frame_{frame_num:06d}.png"
+        if window is not None:
+            t_val = float(t_values[t_idx])
+            frame_ds = ds.sel(t=slice(t_val, t_val + window)).mean(dim="t")
+        else:
+            frame_ds = ds.isel(t=t_idx)
+
+        plot_vel_transfer_by_theta_by_sign(
+            frame_ds,
+            grids_nc=grids_nc,
+            output_dir=frames_dir,
+            filename=frame_filename,
+            _quiet=True,
+        )
+        if verbose:
+            print(f"  Frame {frame_num + 1}/{n_frames}")
+
+    output_path = output_dir / filename
+    _stitch_frames_to_movie(frames_dir, output_path, fps=fps, crf=crf)
 
     print(f"Saved {output_path}")
     return output_path
