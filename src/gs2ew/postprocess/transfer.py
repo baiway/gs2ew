@@ -7,6 +7,7 @@ from matplotlib.colors import LogNorm
 from pathlib import Path
 
 from gs2ew.utils.gs2_output import detect_saturation_time as _detect_saturation_time
+from gs2ew.utils.weights import get_weights
 
 def plot_transfer_by_theta(
     ds: xr.Dataset,
@@ -255,6 +256,107 @@ def plot_transfer_by_theta_movie(
     ) as writer:
         for frame_path in sorted(frames_dir.glob("frame_*.png")):
             writer.append_data(imageio.imread(str(frame_path)))
+
+    print(f"Saved {output_path}")
+    return output_path
+
+
+def plot_vel_transfer_by_theta_by_sign(
+    ds_vel: xr.Dataset,
+    grids_nc: str | Path | None = None,
+    output_dir: str | Path = "outputs",
+    filename: str | None = None,
+) -> Path:
+    """Plot the poloidal structure of the velocity-resolved entropy transfer,
+    integrated over velocity space.
+
+    Each enabled velocity-resolved diagnostic in `ds_vel` is weighted by the
+    velocity-space integration weights `wl(lambda, theta)` and
+    `w(species, egrid)` before summing over all non-theta dimensions except
+    `sign`. The two parallel-velocity directions (sign=1: $v_\parallel > 0$,
+    sign=2: $v_\parallel < 0$) are plotted as separate curves (solid and
+    dashed respectively) on the same axis.
+
+    Parameters
+    ----------
+    ds_vel : xarray.Dataset
+        Velocity-resolved transfer dataset. Expected to contain one or more
+        of the diagnostics listed below, each with dims
+        `(species, sign, lambda, egrid, theta, kxt_shift)`.
+    grids_nc : str or Path, optional
+        Path to a `.grids.nc` file produced by `dump_grids`. Used to load
+        `wl` and `w` if they are absent from `ds_vel`.
+    output_dir : str or Path, optional
+        Directory where the plot will be saved. Default is `"outputs"`.
+    filename : str, optional
+        Filename for the plot. If None, uses `"vel_transfer_by_theta.png"`.
+
+    Returns
+    -------
+    Path
+        Path to the saved figure file.
+
+    Raises
+    ------
+    MissingWeightsError
+        If `wl` and `w` cannot be found in `ds_vel` or `grids_nc`.
+    """
+    all_diags = [
+        "entropy_transfer_phi_velocity",
+        "entropy_transfer_apar_velocity",
+        "entropy_transfer_bpar_velocity",
+    ]
+    enabled_diagnostics = [d for d in all_diags if d in ds_vel]
+
+    labels = {
+        "entropy_transfer_phi_velocity":  r"$T_{S,\phi}^\text{ZF}$",
+        "entropy_transfer_apar_velocity": r"$T_{S,A_\parallel}^\text{ZF}$",
+        "entropy_transfer_bpar_velocity": r"$T_{S,B_\parallel}^\text{ZF}$",
+    }
+
+    weights = get_weights(ds_vel, grids_nc=grids_nc)
+    wl = weights["wl"]  # dims (lambda, theta)
+    w = weights["w"]    # dims (species, egrid)
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if filename is None:
+        filename = "vel_transfer_by_theta.png"
+
+    theta = ds_vel["theta"].values
+    sign_values = ds_vel["sign"].values
+
+    # sign=1 → v_∥ > 0 (solid), sign=2 → v_∥ < 0 (dashed)
+    sign_styles = {sign_values[0]: "-", sign_values[1]: "--"}
+    sign_labels = {
+        sign_values[0]: r"$v_\parallel > 0$",
+        sign_values[1]: r"$v_\parallel < 0$",
+    }
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    for diag in enabled_diagnostics:
+        for s in sign_values:
+            # Multiply by velocity-space weights, then sum over all non-theta
+            # dimensions (excluding sign) to obtain the theta-dependent transfer.
+            transfer = (
+                ds_vel[diag].sel(sign=s) * wl * w
+            ).sum(dim=["species", "lambda", "egrid", "kxt_shift"])
+
+            ax.plot(theta, transfer.values, linewidth=1.5,
+                    linestyle=sign_styles[s],
+                    label=f"{labels[diag]}, {sign_labels[s]}")
+
+    ax.set_xlabel(r"$\theta$", fontsize=12)
+    ax.set_ylabel("transfer", fontsize=12)
+    ax.legend()
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+
+    output_path = output_dir / filename
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
 
     print(f"Saved {output_path}")
     return output_path
