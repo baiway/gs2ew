@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import xarray as xr
 
 from gs2ew.utils.weights import get_weights
@@ -87,6 +88,92 @@ def plot_weights(
     ax_wl.set_ylabel(r"$\lambda$", fontsize=12)
     ax_wl.set_title("w_l(\lambda, \theta)")
 
+    plt.tight_layout()
+
+    output_path = output_dir / filename
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"Saved {output_path}")
+    return output_path
+
+
+def plot_wl_by_lambda(
+    ds: xr.Dataset,
+    grids_nc: str | Path | None = None,
+    output_dir: str | Path = "outputs",
+    filename: str | None = None,
+    ncols: int = 6,
+) -> Path:
+    """Plot `wl` against `lambda` for each `theta` on a grid of subplots.
+
+    Each subplot corresponds to one theta grid point and shows the pitch-angle
+    weight `wl` as a function of `lambda`. Subplots are arranged in a grid
+    with `ncols` columns; the figure width is fixed and the height grows with
+    the number of rows, so individual subplots remain a consistent size
+    regardless of how many theta points there are.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        GS2 output dataset (loaded from `.out.nc`).
+    grids_nc : str or Path, optional
+        Path to a `.grids.nc` file produced by `dump_grids`. Only used
+        if `wl` is absent from `ds`.
+    output_dir : str or Path, optional
+        Directory where the plot will be saved. Default is `"outputs"`.
+    filename : str, optional
+        Filename for the plot. If None, uses `"wl_by_lambda.png"`.
+    ncols : int, optional
+        Number of subplot columns. Default is 6.
+
+    Returns
+    -------
+    Path
+        Path to the saved figure file.
+
+    Raises
+    ------
+    MissingWeightsError
+        If the weights cannot be found in `ds` or `grids_nc`.
+    """
+    weights = get_weights(ds, grids_nc=grids_nc)
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if filename is None:
+        filename = "wl_by_lambda.png"
+
+    # wl has dims (lambda, theta); wl[:, i] is the lambda-profile at theta[i]
+    lam = weights["wl"].coords["lambda"].values
+    theta = weights["wl"].coords["theta"].values
+    wl = weights["wl"].values
+    ntheta = len(theta)
+
+    nrows = int(np.ceil(ntheta / ncols))
+
+    # Fixed width; height scales with the number of rows so each subplot
+    # stays a consistent size even for large theta grids.
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(14, nrows * 2.5),
+        sharex=True, sharey=True,
+    )
+    # Ensure axes is always a 2D array for uniform indexing
+    axes = np.array(axes).reshape(nrows, ncols)
+
+    for i, ax in enumerate(axes.flat):
+        if i < ntheta:
+            ax.plot(lam, wl[:, i], "x-", linewidth=0.8, markersize=4,
+                    markeredgewidth=0.8)
+            ax.set_title(rf"$\theta = {theta[i]:.2f}$", fontsize=8)
+            ax.grid(alpha=0.3)
+        else:
+            ax.set_visible(False)
+
+    fig.supxlabel(r"$\lambda$", fontsize=12)
+    fig.supylabel(r"$w_\lambda$", fontsize=12)
     plt.tight_layout()
 
     output_path = output_dir / filename
