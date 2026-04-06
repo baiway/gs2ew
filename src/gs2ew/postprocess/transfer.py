@@ -398,6 +398,211 @@ def plot_vel_transfer_by_theta_by_sign(
     return output_path
 
 
+def plot_vel_transfer_theta_lambda(
+    ds: xr.Dataset,
+    grids_nc: str | Path | None = None,
+    diag: str = "entropy_transfer_phi_velocity",
+    output_dir: str | Path = "outputs",
+    filename: str | None = None,
+    _quiet: bool = False,
+) -> Path:
+    """Plot a 2D heatmap of the entropy transfer in lambda-theta space.
+
+    Shows a figure with two subplots side by side — one for each parallel-velocity
+    sign (sign=1: $v_\parallel > 0$, sign=2: $v_\parallel < 0$). The x-axis is
+    `theta`, the y-axis is `lambda`. Each cell is weighted by `wl(lambda, theta)`
+    and `w(species, egrid)` and summed over `species`, `egrid`, and `kxt_shift`,
+    so that integrating along the lambda axis of either panel recovers the
+    corresponding curve in `plot_vel_transfer_by_theta_by_sign`.
+
+    A symmetric diverging colormap (`RdBu_r`) is used with a shared colorbar,
+    so the zero point is always centred.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        GS2 output dataset. Must contain `diag` with dims
+        `(species, sign, lambda, egrid, theta, kxt_shift)`.
+    grids_nc : str or Path, optional
+        Path to a `.grids.nc` file produced by `dump_grids`. Used to load
+        `wl` and `w` if they are absent from `ds`.
+    diag : str, optional
+        Name of the velocity-resolved diagnostic to plot. Defaults to
+        `"entropy_transfer_phi_velocity"`.
+    output_dir : str or Path, optional
+        Directory where the plot will be saved. Default is `"outputs"`.
+    filename : str, optional
+        Filename for the plot. If None, uses `"vel_transfer_theta_lambda.png"`.
+
+    Returns
+    -------
+    Path
+        Path to the saved figure file.
+
+    Raises
+    ------
+    KeyError
+        If `diag` is not present in `ds`.
+    MissingWeightsError
+        If `wl` and `w` cannot be found in `ds` or `grids_nc`.
+    """
+    if diag not in ds:
+        raise KeyError(f"Diagnostic '{diag}' not found in dataset.")
+
+    weights = get_weights(ds, grids_nc=grids_nc)
+    wl = weights["wl"]  # dims (lambda, theta)
+    w  = weights["w"]   # dims (species, egrid)
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if filename is None:
+        filename = "vel_transfer_theta_lambda.png"
+
+    theta = ds["theta"].values
+    lam   = ds["lambda"].values
+    sign_values = ds["sign"].values
+
+    sign_titles = {
+        sign_values[0]: r"$v_\parallel > 0$",
+        sign_values[1]: r"$v_\parallel < 0$",
+    }
+
+    # Compute weighted transfer: sum over species, egrid, kxt_shift.
+    # Result has dims (sign, lambda, theta).
+    transfer = (
+        ds[diag] * wl * w
+    ).sum(dim=["species", "egrid", "kxt_shift"])
+
+    # Symmetric colour limits so zero is always centred.
+    vmax = float(abs(transfer).max())
+    vmin = -vmax
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+
+    images = []
+    for ax, s in zip(axes, sign_values):
+        data = transfer.sel(sign=s).values  # shape (lambda, theta)
+        im = ax.pcolormesh(theta, lam, data, cmap="RdBu_r", vmin=vmin, vmax=vmax,
+                           shading="auto")
+        images.append(im)
+        ax.set_title(sign_titles[s])
+        ax.set_xlabel(r"$\theta$", fontsize=12)
+
+    axes[0].set_ylabel(r"$\lambda$", fontsize=12)
+
+    fig.colorbar(images[0], ax=axes, label="weighted transfer", shrink=0.8)
+    plt.tight_layout()
+
+    output_path = output_dir / filename
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    if not _quiet:
+        print(f"Saved {output_path}")
+    return output_path
+
+
+def plot_vel_transfer_theta_lambda_movie(
+    ds: xr.Dataset,
+    grids_nc: str | Path | None = None,
+    diag: str = "entropy_transfer_phi_velocity",
+    tstart: float | None = None,
+    window: float | None = None,
+    output_dir: str | Path = "outputs",
+    filename: str | None = None,
+    fps: int = 10,
+    crf: int = 18,
+    verbose: bool = False,
+) -> Path:
+    """Creates a movie of `plot_vel_transfer_theta_lambda` over time.
+
+    Frames are saved individually to a subdirectory of `output_dir`, then
+    stitched into a video. `ds` must contain a `t` dimension.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        GS2 output dataset with a `t` dimension.
+    grids_nc : str or Path, optional
+        Path to a `.grids.nc` file produced by `dump_grids`. Used to load
+        `wl` and `w` if they are absent from `ds`.
+    diag : str, optional
+        Name of the velocity-resolved diagnostic to plot. Defaults to
+        `"entropy_transfer_phi_velocity"`.
+    tstart : float, optional
+        Start time for the movie. Detected automatically if not provided.
+        Falls back to `t[0]` with a warning if detection fails.
+    window : float, optional
+        Averaging window duration. If provided, each frame shows the rolling
+        average over `window` time units. If omitted, frames are instantaneous.
+    output_dir : str or Path, optional
+        Directory where the movie and frame images are saved.
+        Default is `"outputs"`.
+    filename : str, optional
+        Filename for the output movie. If None, uses
+        `"vel_transfer_theta_lambda_movie.mp4"`.
+    fps : int, optional
+        Frames per second. Default is 10.
+    crf : int, optional
+        libx264 Constant Rate Factor (0 = lossless, 51 = worst). Default
+        is 18.
+    verbose : bool, optional
+        If True, prints frame count and per-frame progress. Default is False.
+
+    Returns
+    -------
+    Path
+        Path to the saved movie file.
+
+    Raises
+    ------
+    ValueError
+        If no valid frames exist for the given `tstart` and `window`.
+    """
+    frame_indices = _resolve_frame_indices(ds, tstart, window)
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if filename is None:
+        filename = "vel_transfer_theta_lambda_movie.mp4"
+
+    frames_dir = output_dir / (Path(filename).stem + "_frames")
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    t_values = ds["t"].values
+
+    n_frames = len(frame_indices)
+    if verbose:
+        print(f"Generating {n_frames} frames...")
+
+    for frame_num, t_idx in enumerate(frame_indices):
+        frame_filename = f"frame_{frame_num:06d}.png"
+        if window is not None:
+            t_val = float(t_values[t_idx])
+            frame_ds = ds.sel(t=slice(t_val, t_val + window)).mean(dim="t")
+        else:
+            frame_ds = ds.isel(t=t_idx)
+
+        plot_vel_transfer_theta_lambda(
+            frame_ds,
+            grids_nc=grids_nc,
+            diag=diag,
+            output_dir=frames_dir,
+            filename=frame_filename,
+            _quiet=True,
+        )
+        if verbose:
+            print(f"  Frame {frame_num + 1}/{n_frames}")
+
+    output_path = output_dir / filename
+    _stitch_frames_to_movie(frames_dir, output_path, fps=fps, crf=crf)
+
+    print(f"Saved {output_path}")
+    return output_path
+
+
 def plot_vel_transfer_by_theta_by_sign_movie(
     ds: xr.Dataset,
     grids_nc: str | Path | None = None,
