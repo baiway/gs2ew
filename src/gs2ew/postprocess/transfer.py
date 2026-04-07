@@ -298,6 +298,8 @@ def plot_transfer_by_theta_movie(
 def plot_vel_transfer_by_theta_by_sign(
     ds: xr.Dataset,
     grids_nc: str | Path | None = None,
+    window: float | None = None,
+    tstart: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
     _quiet: bool = False,
@@ -312,19 +314,30 @@ def plot_vel_transfer_by_theta_by_sign(
     sign=2: vpa < 0) are plotted as separate curves (solid and
     dashed respectively) on the same axis.
 
+    By default, plots the last time step. If `window` is provided, the
+    diagnostics are averaged over a time window instead.
+
     Parameters
     ----------
     ds : xarray.Dataset
-        Velocity-resolved transfer dataset. Expected to contain one or more
-        of the diagnostics listed below, each with dims
-        `(species, sign, lambda, egrid, theta, kxt_shift)`.
+        GS2 output dataset (loaded from `.out.nc` file). Expected to contain
+        one or more of the diagnostics listed below, each with dims
+        `(t, species, sign, lambda, egrid, theta, kxt_shift)`.
     grids_nc : str or Path, optional
         Path to a `.grids.nc` file produced by `dump_grids`. Used to load
         `wl` and `w` if they are absent from `ds`.
+    window : float, optional
+        Duration of the averaging window. If provided without `tstart`,
+        averages over the last `window` time units. If provided with
+        `tstart`, averages from `tstart` over length `window`.
+    tstart : float, optional
+        Start time for the averaging window. Requires `window` to be set;
+        raises ValueError if `window` is not provided.
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is `"outputs"`.
     filename : str, optional
-        Filename for the plot. If None, uses `"vel_transfer_by_theta.png"`.
+        Filename for the plot. If None, uses `"vel_transfer_by_theta.png"`
+        (or `"vel_transfer_by_theta_averaged.png"` when averaging).
 
     Returns
     -------
@@ -333,9 +346,14 @@ def plot_vel_transfer_by_theta_by_sign(
 
     Raises
     ------
+    ValueError
+        If `tstart` is given without `window`.
     MissingWeightsError
         If `wl` and `w` cannot be found in `ds` or `grids_nc`.
     """
+    if tstart is not None and window is None:
+        raise ValueError("`tstart` requires `window` to be specified.")
+
     all_diags = [
         "entropy_transfer_phi_velocity",
         "entropy_transfer_apar_velocity",
@@ -356,9 +374,6 @@ def plot_vel_transfer_by_theta_by_sign(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if filename is None:
-        filename = "vel_transfer_by_theta.png"
-
     theta = ds["theta"].values
     sign_values = ds["sign"].values
 
@@ -371,17 +386,42 @@ def plot_vel_transfer_by_theta_by_sign(
 
     fig, ax = plt.subplots(figsize=(10, 5))
 
-    for diag in enabled_diagnostics:
-        for s in sign_values:
-            # Multiply by velocity-space weights, then sum over all non-theta
-            # dimensions (excluding sign) to obtain the theta-dependent transfer.
-            transfer = (
-                ds[diag].sel(sign=s) * wl * w
-            ).sum(dim=["species", "lambda", "egrid", "kxt_shift"])
+    if window is not None:
+        if tstart is None:
+            tstart = float(ds["t"].values[-1]) - window
+        tend = tstart + window
 
-            ax.plot(theta, transfer.values, linewidth=1.5,
-                    linestyle=sign_styles[s],
-                    label=f"{labels[diag]}, {sign_labels[s]}")
+        if filename is None:
+            filename = "vel_transfer_by_theta_averaged.png"
+
+        for diag in enabled_diagnostics:
+            for s in sign_values:
+                # Average over the time window per diagnostic, then weight and
+                # sum over velocity dimensions to get the theta-dependent transfer.
+                transfer = (
+                    ds[diag].sel(t=slice(tstart, tend), sign=s).mean(dim="t") * wl * w
+                ).sum(dim=["species", "lambda", "egrid", "kxt_shift"])
+
+                ax.plot(theta, transfer.values, linewidth=1.5,
+                        linestyle=sign_styles[s],
+                        label=f"{labels[diag]}, {sign_labels[s]}")
+
+        ax.set_title(f"Averaged over t = [{tstart:.1f}, {tend:.1f}]")
+    else:
+        if filename is None:
+            filename = "vel_transfer_by_theta.png"
+
+        for diag in enabled_diagnostics:
+            for s in sign_values:
+                # Multiply by velocity-space weights, then sum over all non-theta
+                # dimensions (excluding sign) to obtain the theta-dependent transfer.
+                transfer = (
+                    ds[diag].isel(t=-1).sel(sign=s) * wl * w
+                ).sum(dim=["species", "lambda", "egrid", "kxt_shift"])
+
+                ax.plot(theta, transfer.values, linewidth=1.5,
+                        linestyle=sign_styles[s],
+                        label=f"{labels[diag]}, {sign_labels[s]}")
 
     ax.set_xlabel(r"$\theta$", fontsize=12)
     ax.set_ylabel("transfer", fontsize=12)
@@ -401,38 +441,49 @@ def plot_vel_transfer_by_theta_by_sign(
 def plot_vel_transfer_theta_lambda(
     ds: xr.Dataset,
     grids_nc: str | Path | None = None,
-    diag: str = "entropy_transfer_phi_velocity",
+    window: float | None = None,
+    tstart: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
     _quiet: bool = False,
 ) -> Path:
-    """Plot a 2D heatmap of the entropy transfer in lambda-theta space.
+    """Plot 2D heatmaps of the entropy transfer in lambda-theta space.
 
-    Shows a figure with two subplots side by side — one for each parallel-velocity
-    sign (sign=1: $v_\parallel > 0$, sign=2: $v_\parallel < 0$). The x-axis is
-    `theta`, the y-axis is `lambda`. Each cell is weighted by `wl(lambda, theta)`
-    and `w(species, egrid)` and summed over `species`, `egrid`, and `kxt_shift`,
-    so that integrating along the lambda axis of either panel recovers the
-    corresponding curve in `plot_vel_transfer_by_theta_by_sign`.
+    For each enabled velocity-resolved diagnostic, shows a row of two subplots
+    side by side — one for each parallel-velocity sign (sign=1: vpa > 0,
+    sign=2: vpa < 0). The x-axis is `theta`, the y-axis is `lambda`. Each
+    cell is weighted by `wl(lambda, theta)` and `w(species, egrid)` and summed
+    over `species`, `egrid`, and `kxt_shift`, so that integrating along the
+    lambda axis of either panel recovers the corresponding curve in
+    `plot_vel_transfer_by_theta_by_sign`.
 
-    A symmetric diverging colormap (`RdBu_r`) is used with a shared colorbar,
-    so the zero point is always centred.
+    A symmetric diverging colormap (`RdBu_r`) is used with a per-row shared
+    colorbar, so the zero point is always centred.
+
+    By default, plots the last time step. If `window` is provided, the
+    diagnostics are averaged over a time window instead.
 
     Parameters
     ----------
     ds : xarray.Dataset
-        GS2 output dataset. Must contain `diag` with dims
-        `(species, sign, lambda, egrid, theta, kxt_shift)`.
+        GS2 output dataset (loaded from `.out.nc` file). Expected to contain
+        one or more velocity-resolved diagnostics, each with dims
+        `(t, species, sign, lambda, egrid, theta, kxt_shift)`.
     grids_nc : str or Path, optional
         Path to a `.grids.nc` file produced by `dump_grids`. Used to load
         `wl` and `w` if they are absent from `ds`.
-    diag : str, optional
-        Name of the velocity-resolved diagnostic to plot. Defaults to
-        `"entropy_transfer_phi_velocity"`.
+    window : float, optional
+        Duration of the averaging window. If provided without `tstart`,
+        averages over the last `window` time units. If provided with
+        `tstart`, averages from `tstart` over length `window`.
+    tstart : float, optional
+        Start time for the averaging window. Requires `window` to be set;
+        raises ValueError if `window` is not provided.
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is `"outputs"`.
     filename : str, optional
-        Filename for the plot. If None, uses `"vel_transfer_theta_lambda.png"`.
+        Filename for the plot. If None, uses `"vel_transfer_theta_lambda.png"`
+        (or `"vel_transfer_theta_lambda_averaged.png"` when averaging).
 
     Returns
     -------
@@ -441,13 +492,26 @@ def plot_vel_transfer_theta_lambda(
 
     Raises
     ------
-    KeyError
-        If `diag` is not present in `ds`.
+    ValueError
+        If `tstart` is given without `window`.
     MissingWeightsError
         If `wl` and `w` cannot be found in `ds` or `grids_nc`.
     """
-    if diag not in ds:
-        raise KeyError(f"Diagnostic '{diag}' not found in dataset.")
+    if tstart is not None and window is None:
+        raise ValueError("`tstart` requires `window` to be specified.")
+
+    all_diags = [
+        "entropy_transfer_phi_velocity",
+        "entropy_transfer_apar_velocity",
+        "entropy_transfer_bpar_velocity",
+    ]
+    enabled_diagnostics = [d for d in all_diags if d in ds]
+
+    diag_labels = {
+        "entropy_transfer_phi_velocity":  r"$T_{S,\phi}^\text{ZF}$",
+        "entropy_transfer_apar_velocity": r"$T_{S,A_\parallel}^\text{ZF}$",
+        "entropy_transfer_bpar_velocity": r"$T_{S,B_\parallel}^\text{ZF}$",
+    }
 
     weights = get_weights(ds, grids_nc=grids_nc)
     wl = weights["wl"]  # dims (lambda, theta)
@@ -455,9 +519,6 @@ def plot_vel_transfer_theta_lambda(
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    if filename is None:
-        filename = "vel_transfer_theta_lambda.png"
 
     theta = ds["theta"].values
     lam   = ds["lambda"].values
@@ -468,31 +529,59 @@ def plot_vel_transfer_theta_lambda(
         sign_values[1]: r"$v_\parallel < 0$",
     }
 
-    # Compute weighted transfer: sum over species, egrid, kxt_shift.
-    # Result has dims (sign, lambda, theta).
-    transfer = (
-        ds[diag] * wl * w
-    ).sum(dim=["species", "egrid", "kxt_shift"])
+    if window is not None:
+        if tstart is None:
+            tstart = float(ds["t"].values[-1]) - window
+        tend = tstart + window
 
-    # Symmetric colour limits so zero is always centred.
-    vmax = float(abs(transfer).max())
-    vmin = -vmax
+        if filename is None:
+            filename = "vel_transfer_theta_lambda_averaged.png"
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+        time_title = f"Averaged over t = [{tstart:.1f}, {tend:.1f}]"
 
-    images = []
-    for ax, s in zip(axes, sign_values):
-        data = transfer.sel(sign=s).values  # shape (lambda, theta)
-        im = ax.pcolormesh(theta, lam, data, cmap="RdBu_r", vmin=vmin, vmax=vmax,
-                           shading="auto")
-        images.append(im)
-        ax.set_title(sign_titles[s])
-        ax.set_xlabel(r"$\theta$", fontsize=12)
+        def get_transfer(diag):
+            return (
+                ds[diag].sel(t=slice(tstart, tend)).mean(dim="t") * wl * w
+            ).sum(dim=["species", "egrid", "kxt_shift"])
+    else:
+        if filename is None:
+            filename = "vel_transfer_theta_lambda.png"
 
-    axes[0].set_ylabel(r"$\lambda$", fontsize=12)
+        time_title = None
 
-    fig.colorbar(images[0], ax=axes, label="weighted transfer", shrink=0.8)
-    plt.tight_layout()
+        def get_transfer(diag):
+            return (
+                ds[diag].isel(t=-1) * wl * w
+            ).sum(dim=["species", "egrid", "kxt_shift"])
+
+    n_diags = len(enabled_diagnostics)
+    fig, axes = plt.subplots(n_diags, 2, figsize=(12, 5 * n_diags), sharey=True,
+                             squeeze=False)
+
+    for row, diag in enumerate(enabled_diagnostics):
+        # Compute weighted transfer: sum over species, egrid, kxt_shift.
+        # Result has dims (sign, lambda, theta).
+        transfer = get_transfer(diag)
+
+        # Symmetric colour limits so zero is always centred.
+        vmax = float(abs(transfer).max())
+        vmin = -vmax
+
+        row_axes = axes[row]
+        images = []
+        for ax, s in zip(row_axes, sign_values):
+            data = transfer.sel(sign=s).values  # shape (lambda, theta)
+            im = ax.pcolormesh(theta, lam, data, cmap="RdBu_r", vmin=vmin, vmax=vmax,
+                               shading="auto")
+            images.append(im)
+            ax.set_title(f"{diag_labels[diag]}, {sign_titles[s]}")
+            ax.set_xlabel(r"$\theta$", fontsize=12)
+
+        row_axes[0].set_ylabel(r"$\lambda$", fontsize=12)
+        fig.colorbar(images[0], ax=row_axes, label="transfer", shrink=0.8)
+
+    if time_title is not None:
+        fig.suptitle(time_title, fontsize=12)
 
     output_path = output_dir / filename
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -506,7 +595,6 @@ def plot_vel_transfer_theta_lambda(
 def plot_vel_transfer_theta_lambda_movie(
     ds: xr.Dataset,
     grids_nc: str | Path | None = None,
-    diag: str = "entropy_transfer_phi_velocity",
     tstart: float | None = None,
     window: float | None = None,
     output_dir: str | Path = "outputs",
@@ -527,9 +615,6 @@ def plot_vel_transfer_theta_lambda_movie(
     grids_nc : str or Path, optional
         Path to a `.grids.nc` file produced by `dump_grids`. Used to load
         `wl` and `w` if they are absent from `ds`.
-    diag : str, optional
-        Name of the velocity-resolved diagnostic to plot. Defaults to
-        `"entropy_transfer_phi_velocity"`.
     tstart : float, optional
         Start time for the movie. Detected automatically if not provided.
         Falls back to `t[0]` with a warning if detection fails.
@@ -579,16 +664,11 @@ def plot_vel_transfer_theta_lambda_movie(
 
     for frame_num, t_idx in enumerate(frame_indices):
         frame_filename = f"frame_{frame_num:06d}.png"
-        if window is not None:
-            t_val = float(t_values[t_idx])
-            frame_ds = ds.sel(t=slice(t_val, t_val + window)).mean(dim="t")
-        else:
-            frame_ds = ds.isel(t=t_idx)
-
         plot_vel_transfer_theta_lambda(
-            frame_ds,
+            ds,
             grids_nc=grids_nc,
-            diag=diag,
+            window=window,
+            tstart=float(t_values[t_idx]),
             output_dir=frames_dir,
             filename=frame_filename,
             _quiet=True,
@@ -679,15 +759,11 @@ def plot_vel_transfer_by_theta_by_sign_movie(
 
     for frame_num, t_idx in enumerate(frame_indices):
         frame_filename = f"frame_{frame_num:06d}.png"
-        if window is not None:
-            t_val = float(t_values[t_idx])
-            frame_ds = ds.sel(t=slice(t_val, t_val + window)).mean(dim="t")
-        else:
-            frame_ds = ds.isel(t=t_idx)
-
         plot_vel_transfer_by_theta_by_sign(
-            frame_ds,
+            ds,
             grids_nc=grids_nc,
+            window=window,
+            tstart=float(t_values[t_idx]),
             output_dir=frames_dir,
             filename=frame_filename,
             _quiet=True,
