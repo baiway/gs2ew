@@ -415,8 +415,9 @@ def plot_vel_transfer_by_theta_by_sign(
             for s in sign_values:
                 # Multiply by velocity-space weights, then sum over all non-theta
                 # dimensions (excluding sign) to obtain the theta-dependent transfer.
+                diag_da = ds[diag].isel(t=-1) if "t" in ds[diag].dims else ds[diag]
                 transfer = (
-                    ds[diag].isel(t=-1).sel(sign=s) * wl * w
+                    diag_da.sel(sign=s) * wl * w
                 ).sum(dim=["species", "lambda", "egrid", "kxt_shift"])
 
                 ax.plot(theta, transfer.values, linewidth=1.5,
@@ -550,9 +551,8 @@ def plot_vel_transfer_theta_lambda(
         time_title = None
 
         def get_transfer(diag):
-            return (
-                ds[diag].isel(t=-1) * wl * w
-            ).sum(dim=["species", "egrid", "kxt_shift"])
+            diag_da = ds[diag].isel(t=-1) if "t" in ds[diag].dims else ds[diag]
+            return (diag_da * wl * w).sum(dim=["species", "egrid", "kxt_shift"])
 
     n_diags = len(enabled_diagnostics)
     fig, axes = plt.subplots(n_diags, 2, figsize=(12, 5 * n_diags), sharey=True,
@@ -664,15 +664,24 @@ def plot_vel_transfer_theta_lambda_movie(
 
     for frame_num, t_idx in enumerate(frame_indices):
         frame_filename = f"frame_{frame_num:06d}.png"
-        plot_vel_transfer_theta_lambda(
-            ds,
-            grids_nc=grids_nc,
-            window=window,
-            tstart=float(t_values[t_idx]),
-            output_dir=frames_dir,
-            filename=frame_filename,
-            _quiet=True,
-        )
+        if window is not None:
+            plot_vel_transfer_theta_lambda(
+                ds,
+                grids_nc=grids_nc,
+                window=window,
+                tstart=float(t_values[t_idx]),
+                output_dir=frames_dir,
+                filename=frame_filename,
+                _quiet=True,
+            )
+        else:
+            plot_vel_transfer_theta_lambda(
+                ds.isel(t=t_idx),
+                grids_nc=grids_nc,
+                output_dir=frames_dir,
+                filename=frame_filename,
+                _quiet=True,
+            )
         if verbose:
             print(f"  Frame {frame_num + 1}/{n_frames}")
 
@@ -759,15 +768,24 @@ def plot_vel_transfer_by_theta_by_sign_movie(
 
     for frame_num, t_idx in enumerate(frame_indices):
         frame_filename = f"frame_{frame_num:06d}.png"
-        plot_vel_transfer_by_theta_by_sign(
-            ds,
-            grids_nc=grids_nc,
-            window=window,
-            tstart=float(t_values[t_idx]),
-            output_dir=frames_dir,
-            filename=frame_filename,
-            _quiet=True,
-        )
+        if window is not None:
+            plot_vel_transfer_by_theta_by_sign(
+                ds,
+                grids_nc=grids_nc,
+                window=window,
+                tstart=float(t_values[t_idx]),
+                output_dir=frames_dir,
+                filename=frame_filename,
+                _quiet=True,
+            )
+        else:
+            plot_vel_transfer_by_theta_by_sign(
+                ds.isel(t=t_idx),
+                grids_nc=grids_nc,
+                output_dir=frames_dir,
+                filename=frame_filename,
+                _quiet=True,
+            )
         if verbose:
             print(f"  Frame {frame_num + 1}/{n_frames}")
 
