@@ -25,9 +25,10 @@ args = parser.parse_args()
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
-# Open lazily: data is read from disk only as each plot needs it,
-# keeping memory usage bounded for large (tens of GB) files.
-ds = xr.open_dataset(args.nc_file)
+# Open with dask chunking along the time axis so that windowed averages over
+# large velocity-resolved variables are computed one timestep at a time rather
+# than loading the full window into memory.
+ds = xr.open_dataset(args.nc_file, chunks={"t": 1})
 
 with ds:
     # Field diagnostics
