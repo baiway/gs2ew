@@ -91,6 +91,7 @@ def plot_transfer_by_theta(
     tstart: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
+    fix_entropy_sign: bool = True,
     _quiet: bool = False,
 ) -> Path:
     """Plots the poloidal structure of each enabled transfer diagnostic.
@@ -114,6 +115,10 @@ def plot_transfer_by_theta(
     filename : str, optional
         Filename for the plot. If None, uses "transfer_by_theta.png" (or
         "transfer_by_theta_averaged.png" when averaging).
+    fix_entropy_sign : bool, optional
+        If True (default), multiplies entropy transfer diagnostics by -1 to
+        correct a sign error in the GS2 implementation. Does not affect the
+        kinetic energy transfer.
 
     Returns
     -------
@@ -131,6 +136,13 @@ def plot_transfer_by_theta(
         "entropy_transfer_bpar_theta",
     ]
     enabled_diagnostics = [d for d in all_diags if d in ds]
+
+    entropy_sign = -1 if fix_entropy_sign else 1
+    entropy_diags = {
+        "entropy_transfer_phi_theta",
+        "entropy_transfer_apar_theta",
+        "entropy_transfer_bpar_theta",
+    }
 
     # Create output directory if it doesn't exist
     output_dir = Path(output_dir)
@@ -157,7 +169,8 @@ def plot_transfer_by_theta(
             filename = "transfer_by_theta_averaged.png"
 
         for diag in enabled_diagnostics:
-            transfer_avg = ds[diag].sel(t=slice(tstart, tend)).mean(dim="t").values
+            sign = entropy_sign if diag in entropy_diags else 1
+            transfer_avg = sign * ds[diag].sel(t=slice(tstart, tend)).mean(dim="t").values
             ax.plot(theta, transfer_avg, linewidth=1.5, label=labels[diag])
 
         ax.set_title(f"Averaged over t = [{tstart:.1f}, {tend:.1f}]")
@@ -166,7 +179,8 @@ def plot_transfer_by_theta(
             filename = "transfer_by_theta.png"
 
         for diag in enabled_diagnostics:
-            transfer = ds[diag].isel(t=-1).values
+            sign = entropy_sign if diag in entropy_diags else 1
+            transfer = sign * ds[diag].isel(t=-1).values
             ax.plot(theta, transfer, linewidth=1.5, label=labels[diag])
 
     ax.set_xlabel(r"$\theta$", fontsize=12)
@@ -191,6 +205,7 @@ def plot_transfer_by_theta_movie(
     tstart: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
+    fix_entropy_sign: bool = True,
     fps: int = 10,
     crf: int = 18,
     verbose: bool = False,
@@ -225,6 +240,10 @@ def plot_transfer_by_theta_movie(
     filename : str, optional
         Filename for the output movie. If None, uses
         "transfer_by_theta_movie.mp4".
+    fix_entropy_sign : bool, optional
+        If True (default), multiplies entropy transfer diagnostics by -1 to
+        correct a sign error in the GS2 implementation. Does not affect the
+        kinetic energy transfer. Passed through to each frame's plot call.
     fps : int, optional
         Frames per second for the output movie. Default is 10.
     crf : int, optional
@@ -273,6 +292,7 @@ def plot_transfer_by_theta_movie(
                 tstart=float(t_values[t_idx]),
                 output_dir=frames_dir,
                 filename=frame_filename,
+                fix_entropy_sign=fix_entropy_sign,
                 _quiet=True,
             )
         else:
@@ -282,6 +302,7 @@ def plot_transfer_by_theta_movie(
                 ds.isel(t=slice(t_idx, t_idx + 1)),
                 output_dir=frames_dir,
                 filename=frame_filename,
+                fix_entropy_sign=fix_entropy_sign,
                 _quiet=True,
             )
         if verbose:
@@ -302,6 +323,7 @@ def plot_vel_transfer_by_theta_by_sign(
     tstart: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
+    fix_entropy_sign: bool = True,
     _quiet: bool = False,
 ) -> Path:
     """Plot the poloidal structure of the velocity-resolved entropy transfer,
@@ -338,6 +360,9 @@ def plot_vel_transfer_by_theta_by_sign(
     filename : str, optional
         Filename for the plot. If None, uses `"vel_transfer_by_theta.png"`
         (or `"vel_transfer_by_theta_averaged.png"` when averaging).
+    fix_entropy_sign : bool, optional
+        If True (default), multiplies entropy transfer diagnostics by -1 to
+        correct a sign error in the GS2 implementation.
 
     Returns
     -------
@@ -384,6 +409,8 @@ def plot_vel_transfer_by_theta_by_sign(
         sign_values[1]: r"$v_\parallel < 0$",
     }
 
+    entropy_sign = -1 if fix_entropy_sign else 1
+
     fig, ax = plt.subplots(figsize=(10, 5))
 
     if window is not None:
@@ -398,7 +425,7 @@ def plot_vel_transfer_by_theta_by_sign(
             for s in sign_values:
                 # Average over the time window per diagnostic, then weight and
                 # sum over velocity dimensions to get the theta-dependent transfer.
-                transfer = (
+                transfer = entropy_sign * (
                     ds[diag].sel(t=slice(tstart, tend), sign=s).mean(dim="t") * wl * w
                 ).sum(dim=["species", "lambda", "egrid", "kxt_shift"])
 
@@ -416,7 +443,7 @@ def plot_vel_transfer_by_theta_by_sign(
                 # Multiply by velocity-space weights, then sum over all non-theta
                 # dimensions (excluding sign) to obtain the theta-dependent transfer.
                 diag_da = ds[diag].isel(t=-1) if "t" in ds[diag].dims else ds[diag]
-                transfer = (
+                transfer = entropy_sign * (
                     diag_da.sel(sign=s) * wl * w
                 ).sum(dim=["species", "lambda", "egrid", "kxt_shift"])
 
@@ -446,6 +473,7 @@ def plot_vel_transfer_theta_lambda(
     tstart: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
+    fix_entropy_sign: bool = True,
     _quiet: bool = False,
 ) -> Path:
     """Plot 2D heatmaps of the entropy transfer in lambda-theta space.
@@ -485,6 +513,9 @@ def plot_vel_transfer_theta_lambda(
     filename : str, optional
         Filename for the plot. If None, uses `"vel_transfer_theta_lambda.png"`
         (or `"vel_transfer_theta_lambda_averaged.png"` when averaging).
+    fix_entropy_sign : bool, optional
+        If True (default), multiplies entropy transfer diagnostics by -1 to
+        correct a sign error in the GS2 implementation.
 
     Returns
     -------
@@ -530,6 +561,8 @@ def plot_vel_transfer_theta_lambda(
         sign_values[1]: r"$v_\parallel < 0$",
     }
 
+    entropy_sign = -1 if fix_entropy_sign else 1
+
     if window is not None:
         if tstart is None:
             tstart = float(ds["t"].values[-1]) - window
@@ -541,7 +574,7 @@ def plot_vel_transfer_theta_lambda(
         time_title = f"Averaged over t = [{tstart:.1f}, {tend:.1f}]"
 
         def get_transfer(diag):
-            return (
+            return entropy_sign * (
                 ds[diag].sel(t=slice(tstart, tend)).mean(dim="t") * wl * w
             ).sum(dim=["species", "egrid", "kxt_shift"])
     else:
@@ -552,7 +585,7 @@ def plot_vel_transfer_theta_lambda(
 
         def get_transfer(diag):
             diag_da = ds[diag].isel(t=-1) if "t" in ds[diag].dims else ds[diag]
-            return (diag_da * wl * w).sum(dim=["species", "egrid", "kxt_shift"])
+            return entropy_sign * (diag_da * wl * w).sum(dim=["species", "egrid", "kxt_shift"])
 
     n_diags = len(enabled_diagnostics)
     fig, axes = plt.subplots(n_diags, 2, figsize=(12, 5 * n_diags), sharey=True,
@@ -599,6 +632,7 @@ def plot_vel_transfer_theta_lambda_movie(
     window: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
+    fix_entropy_sign: bool = True,
     fps: int = 10,
     crf: int = 18,
     verbose: bool = False,
@@ -627,6 +661,10 @@ def plot_vel_transfer_theta_lambda_movie(
     filename : str, optional
         Filename for the output movie. If None, uses
         `"vel_transfer_theta_lambda_movie.mp4"`.
+    fix_entropy_sign : bool, optional
+        If True (default), multiplies entropy transfer diagnostics by -1 to
+        correct a sign error in the GS2 implementation. Passed through to
+        each frame's plot call.
     fps : int, optional
         Frames per second. Default is 10.
     crf : int, optional
@@ -672,6 +710,7 @@ def plot_vel_transfer_theta_lambda_movie(
                 tstart=float(t_values[t_idx]),
                 output_dir=frames_dir,
                 filename=frame_filename,
+                fix_entropy_sign=fix_entropy_sign,
                 _quiet=True,
             )
         else:
@@ -680,6 +719,7 @@ def plot_vel_transfer_theta_lambda_movie(
                 grids_nc=grids_nc,
                 output_dir=frames_dir,
                 filename=frame_filename,
+                fix_entropy_sign=fix_entropy_sign,
                 _quiet=True,
             )
         if verbose:
@@ -699,6 +739,7 @@ def plot_vel_transfer_by_theta_by_sign_movie(
     window: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
+    fix_entropy_sign: bool = True,
     fps: int = 10,
     crf: int = 18,
     verbose: bool = False,
@@ -731,6 +772,10 @@ def plot_vel_transfer_by_theta_by_sign_movie(
     filename : str, optional
         Filename for the output movie. If None, uses
         `"vel_transfer_by_theta_by_sign_movie.mp4"`.
+    fix_entropy_sign : bool, optional
+        If True (default), multiplies entropy transfer diagnostics by -1 to
+        correct a sign error in the GS2 implementation. Passed through to
+        each frame's plot call.
     fps : int, optional
         Frames per second. Default is 10.
     crf : int, optional
@@ -776,6 +821,7 @@ def plot_vel_transfer_by_theta_by_sign_movie(
                 tstart=float(t_values[t_idx]),
                 output_dir=frames_dir,
                 filename=frame_filename,
+                fix_entropy_sign=fix_entropy_sign,
                 _quiet=True,
             )
         else:
@@ -784,6 +830,7 @@ def plot_vel_transfer_by_theta_by_sign_movie(
                 grids_nc=grids_nc,
                 output_dir=frames_dir,
                 filename=frame_filename,
+                fix_entropy_sign=fix_entropy_sign,
                 _quiet=True,
             )
         if verbose:
