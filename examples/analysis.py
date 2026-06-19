@@ -14,7 +14,14 @@ import argparse
 
 import xarray as xr
 from gs2ew.postprocess.fields import plot_fields_by_mode, plot_fields_time_traces
-from gs2ew.postprocess.transfer import plot_transfer_by_theta, plot_transfer_by_theta_movie, plot_vel_transfer_by_theta_by_sign_movie, plot_vel_transfer_theta_lambda_movie
+from gs2ew.postprocess.transfer import (
+    plot_transfer_by_theta,
+    plot_transfer_by_theta_movie,
+    plot_vel_transfer_by_theta_by_sign,
+    plot_vel_transfer_by_theta_by_sign_movie,
+    plot_vel_transfer_theta_lambda,
+    plot_vel_transfer_theta_lambda_movie,
+)
 
 # ── Args ──────────────────────────────────────────────────────────────────────
 
@@ -35,18 +42,23 @@ with ds:
     plot_fields_time_traces(ds, output_dir=args.output_dir)
     plot_fields_by_mode(ds, output_dir=args.output_dir)
 
+    # ── Theta-resolved transfer (kinetic energy + free energy H, entropy S, U) ──
+
     # Transfer at the last timestep
     plot_transfer_by_theta(ds, output_dir=args.output_dir)
 
     # Transfer averaged over a time window (adjust tstart and window to taste)
-    plot_transfer_by_theta(ds, window=100.0, output_dir=args.output_dir)
+    # plot_transfer_by_theta(ds, window=100.0, output_dir=args.output_dir)
 
     # Movie of the rolling-averaged transfer
-    plot_transfer_by_theta_movie(ds, window=100.0, fps=15, output_dir=args.output_dir)
+    # plot_transfer_by_theta_movie(ds, window=100.0, fps=15, output_dir=args.output_dir)
 
-    # Plot velocity-resolved transfer by theta by sign
-    plot_vel_transfer_by_theta_by_sign_movie(ds, window=100.0, output_dir=args.output_dir, fps=15)
+    # ── Velocity-resolved transfer (needs write_*_transfer_velocity output) ──────
 
-    # Plot velocity-resolved transfer by theta and lambda (separate plots for each sign of
-    # vpa)
-    plot_vel_transfer_theta_lambda_movie(ds, window=100.0, output_dir=args.output_dir, fps=15)
+    # Velocity-resolved transfer vs theta, split by sign of v_parallel
+    # plot_vel_transfer_by_theta_by_sign(ds, output_dir=args.output_dir)
+    # plot_vel_transfer_by_theta_by_sign_movie(ds, window=100.0, output_dir=args.output_dir, fps=15)
+
+    # Velocity-resolved transfer as 2D (theta, lambda) heatmaps, one row per drive
+    # plot_vel_transfer_theta_lambda(ds, output_dir=args.output_dir)
+    # plot_vel_transfer_theta_lambda_movie(ds, window=100.0, output_dir=args.output_dir, fps=15)
