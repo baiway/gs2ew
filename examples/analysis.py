@@ -13,7 +13,12 @@ or, if using uv:
 import argparse
 
 import xarray as xr
-from gs2ew.postprocess.fields import plot_fields_by_mode, plot_fields_time_traces
+from gs2ew.postprocess.fields import (
+    plot_fields_by_mode,
+    plot_fields_time_traces,
+    plot_phi2_by_theta,
+    plot_phi2_by_theta_movie,
+)
 from gs2ew.postprocess.transfer import (
     plot_transfer_by_theta,
     plot_transfer_by_theta_movie,
@@ -41,6 +46,12 @@ with ds:
     # Field diagnostics
     plot_fields_time_traces(ds, output_dir=args.output_dir)
     plot_fields_by_mode(ds, output_dir=args.output_dir)
+
+    # |phi|^2 vs theta, split into zonal (ky=0) and non-zonal (ky>0) parts
+    plot_phi2_by_theta(ds, output_dir=args.output_dir)
+
+    # Movie of |phi|^2 vs theta (needs time-resolved phi_t / write_phi_over_time)
+    # plot_phi2_by_theta_movie(ds, output_dir=args.output_dir, fps=15)
 
     # ── Theta-resolved transfer (kinetic energy + free energy H, entropy S, U) ──
 
