@@ -36,22 +36,43 @@ source .venv/bin/activate  # On macOS/Linux
 
 ## Usage
 
-You can specify the `.out.nc` file, the plots to produce, and the output directory in
-a Python file. A template is provided in [`examples/analysis.py`](examples/analysis.py).
-
-Copy it, set `NC_FILE` and `OUTPUT_DIR` at the top, comment in or out the
-plots you want, then run:
+A template analysis deck is provided in
+[`examples/analysis.py`](examples/analysis.py). It takes the input `.out.nc`
+file and the output directory as command-line arguments. Copy it, comment in
+or out the plots you want, then run:
 
 ```bash
-python analysis.py
+python examples/analysis.py results.out.nc outputs/
 ```
 
 or, without activating the virtual environment:
 
 ```bash
-uv run analysis.py
+uv run examples/analysis.py results.out.nc outputs/
 ```
 
-Plots are saved to `OUTPUT_DIR` (default: `outputs/`). Movie functions also
-save individual frames to a `<name>_frames/` subdirectory alongside the
-`.mp4` file.
+Plots are saved to the output directory you pass. Movie functions also save
+individual frames to a `<name>_frames/` subdirectory alongside the `.mp4`
+file.
+
+## Transfer diagnostics
+
+GS2 writes three related nonlinear-transfer quantities, plotted by the
+functions in [`gs2ew.postprocess.transfer`](src/gs2ew/postprocess/transfer.py):
+
+| Quantity | Symbol | netCDF variable |
+| --- | --- | --- |
+| Free energy | $N_\mathbf{k}^{H,f}$ | `free_energy_transfer_<field>_{theta,velocity}` |
+| Entropy | $N_\mathbf{k}^{S,f}$ | `entropy_transfer_<field>_{theta,velocity}` |
+| Kinetic energy | $T_v^\text{ZF}$ | `kinetic_energy_transfer_theta` |
+
+Here `<field>` is one of `phi`, `apar`, `bpar`. The fluctuation energy
+$N_\mathbf{k}^{U,f}$ is not written to file; it is derived as `U = H + S`.
+
+> **Note on naming:** what older GS2 versions called the "entropy" transfer is
+> now the **free energy** transfer (`free_energy_transfer_*`). The
+> `entropy_transfer_*` variables are a genuinely separate, newer output.
+
+By default the transfer plots multiply the free-energy, entropy and U drives
+by `-1` (`fix_transfer_sign=True`) to correct a sign error in the GS2
+implementation; the kinetic-energy transfer is left untouched.

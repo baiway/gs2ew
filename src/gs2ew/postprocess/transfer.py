@@ -1,13 +1,126 @@
-"""Create various plots of the kinetic energy and entropy transfer."""
+"""Create various plots of the nonlinear transfer diagnostics.
+
+GS2 writes three closely related nonlinear-transfer quantities:
+
+* **free energy** ``H`` — ``free_energy_transfer_<field>_{theta,velocity}``
+* **entropy** ``S``     — ``entropy_transfer_<field>_{theta,velocity}``
+* **kinetic energy**    — ``kinetic_energy_transfer_theta``
+
+where ``<field>`` is one of ``phi``, ``apar`` or ``bpar``. The fluctuation
+energy ``U`` is *not* written to file; it is derived here as ``U = H + S``.
+
+Note on naming: what older GS2 versions called the "entropy" transfer is now
+the **free energy** transfer (``free_energy_transfer_*``); the
+``entropy_transfer_*`` variables are a genuinely separate, newer output. The
+nonlinear drives are labelled :math:`N_\\mathbf{k}^{Q,f}` for quantity
+``Q`` (H/S/U) and field ``f``.
+"""
 
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
 from pathlib import Path
 
 from gs2ew.utils.gs2_output import detect_saturation_time as _detect_saturation_time
 from gs2ew.utils.weights import get_weights
+
+
+# LaTeX symbols for each field, used to build drive labels.
+_FIELD_SYMS = {
+    "phi": r"\phi",
+    "apar": r"A_\parallel",
+    "bpar": r"B_\parallel",
+}
+
+# Stored nonlinear-drive quantities and their label symbols. Fluctuation
+# energy U is not stored; it is derived as U = H + S where both are present.
+_STORED_QUANTITIES = (
+    ("free_energy", "H"),
+    ("entropy", "S"),
+)
+
+# Label for the kinetic-energy transfer (no field/velocity decomposition).
+_KINETIC_LABEL = r"$T_v^\text{ZF}$"
+
+
+def _drive_label(quantity_sym: str, field: str) -> str:
+    """LaTeX label for a nonlinear drive, e.g. ``$N_\\mathbf{k}^{H,\\phi}$``.
+
+    Fluctuation energy U gets an expanded label spelling out U = H + sum_s T_s S.
+    """
+    sym = _FIELD_SYMS[field]
+    if quantity_sym == "U":
+        return (
+            rf"$U_\mathbf{{k}} = H_\mathbf{{k}} + \sum_s T_s S_{{s\mathbf{{k}}}}, "
+            rf"\, N_\mathbf{{k}}^U$ (${sym}$)"
+        )
+    return rf"$N_\mathbf{{k}}^{{{quantity_sym},{sym}}}$"
+
+
+def _global_theta_ylim(
+    ds: xr.Dataset,
+    frame_indices: np.ndarray,
+    transfer_sign: int,
+) -> tuple[float, float]:
+    """Return padded (ymin, ymax) spanning every theta transfer curve over the
+    given frames, so a movie's y-axis stays fixed instead of jumping.
+
+    Uses instantaneous values at each frame's start index; for windowed movies
+    these bound the (averaged) frame values, so the axis is never too small.
+    """
+    series: list[np.ndarray] = []
+
+    if "kinetic_energy_transfer_theta" in ds:
+        series.append(ds["kinetic_energy_transfer_theta"].isel(t=frame_indices).values)
+
+    for field in _FIELD_SYMS:
+        h_name = f"free_energy_transfer_{field}_theta"
+        s_name = f"entropy_transfer_{field}_theta"
+        H = ds[h_name].isel(t=frame_indices).values if h_name in ds else None
+        S = ds[s_name].isel(t=frame_indices).values if s_name in ds else None
+        if H is not None:
+            series.append(transfer_sign * H)
+        if S is not None:
+            series.append(transfer_sign * S)
+        if H is not None and S is not None:
+            series.append(transfer_sign * (H + S))
+
+    allv = np.concatenate([s.ravel() for s in series])
+    lo, hi = float(np.nanmin(allv)), float(np.nanmax(allv))
+    pad = 0.05 * (hi - lo) if hi > lo else 1.0
+    return lo - pad, hi + pad
+
+
+def _movie_norm_factors(
+    ds: xr.Dataset,
+    frame_indices: np.ndarray,
+) -> dict[str, float]:
+    """Per-curve divisors for movie-wide normalisation: each curve's peak
+    absolute value over *all* frames, keyed by the curve's plot label.
+
+    Dividing every frame by these fixed factors (rather than each frame's own
+    peak) preserves both the relative amplitude between curves and their
+    growth/decay over time, while still scaling small terms (e.g. U) into view.
+    """
+    factors: dict[str, float] = {}
+
+    if "kinetic_energy_transfer_theta" in ds:
+        v = ds["kinetic_energy_transfer_theta"].isel(t=frame_indices).values
+        factors[_KINETIC_LABEL] = float(np.nanmax(np.abs(v)))
+
+    for field in _FIELD_SYMS:
+        h_name = f"free_energy_transfer_{field}_theta"
+        s_name = f"entropy_transfer_{field}_theta"
+        H = ds[h_name].isel(t=frame_indices).values if h_name in ds else None
+        S = ds[s_name].isel(t=frame_indices).values if s_name in ds else None
+        if H is not None:
+            factors[_drive_label("H", field)] = float(np.nanmax(np.abs(H)))
+        if S is not None:
+            factors[_drive_label("S", field)] = float(np.nanmax(np.abs(S)))
+        if H is not None and S is not None:
+            factors[_drive_label("U", field)] = float(np.nanmax(np.abs(H + S)))
+
+    return factors
 
 
 def _resolve_frame_indices(
@@ -85,16 +198,25 @@ def _stitch_frames_to_movie(
         for frame_path in sorted(frames_dir.glob("frame_*.png")):
             writer.append_data(imageio.imread(str(frame_path)))
 
+
 def plot_transfer_by_theta(
     ds: xr.Dataset,
     window: float | None = None,
     tstart: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    fix_entropy_sign: bool = True,
+    fix_transfer_sign: bool = True,
+    normalise: bool = False,
+    norm_factors: dict[str, float] | None = None,
+    ylim: tuple[float, float] | None = None,
+    tight_bbox: bool = True,
     _quiet: bool = False,
 ) -> Path:
     """Plots the poloidal structure of each enabled transfer diagnostic.
+
+    Plots the kinetic-energy transfer alongside the free-energy (H), entropy
+    (S) and derived fluctuation-energy (U = H + S) nonlinear drives, for each
+    field (``phi``, ``apar``, ``bpar``) present in `ds`.
 
     By default, plots the last time step. If `window` is provided, the
     diagnostics are averaged over a time window instead.
@@ -115,83 +237,116 @@ def plot_transfer_by_theta(
     filename : str, optional
         Filename for the plot. If None, uses "transfer_by_theta.png" (or
         "transfer_by_theta_averaged.png" when averaging).
-    fix_entropy_sign : bool, optional
-        If True (default), multiplies entropy transfer diagnostics by -1 to
-        correct a sign error in the GS2 implementation. Does not affect the
-        kinetic energy transfer.
+    fix_transfer_sign : bool, optional
+        If True (default), multiplies the free-energy, entropy and U drives by
+        -1 to correct a sign error in the GS2 implementation. Does not affect
+        the kinetic-energy transfer.
+    normalise : bool, optional
+        If True, divide each curve by its peak absolute value so all curves
+        span [-1, 1] and their poloidal structure can be compared regardless of
+        amplitude (useful as the fluctuation energy U is typically much smaller
+        than the other terms). Default is False.
+    norm_factors : dict of str to float, optional
+        Per-curve divisors keyed by plot label, used when ``normalise`` is True.
+        If given, each curve is divided by its supplied factor instead of its
+        own peak; this is how the movie helper applies a fixed, movie-wide
+        normalisation. If None, each curve self-normalises to its own peak.
+    ylim : tuple of float, optional
+        Fixed (ymin, ymax) for the y-axis. Used by the movie helper to keep
+        the axis steady across frames; if None, matplotlib autoscales.
+    tight_bbox : bool, optional
+        If True (default), save with ``bbox_inches="tight"``. Movie frames
+        pass False so every frame has identical pixel dimensions (a
+        requirement for the ffmpeg encoder).
 
     Returns
     -------
     Path
         Path to the saved figure file
+
+    Raises
+    ------
+    ValueError
+        If `tstart` is given without `window`, or if no transfer diagnostics
+        are present in `ds`.
     """
     if tstart is not None and window is None:
         raise ValueError("`tstart` requires `window` to be specified.")
 
-    # Determine enabled transfer diagnostics
-    all_diags = [
-        "kinetic_energy_transfer_theta",
-        "entropy_transfer_phi_theta",
-        "entropy_transfer_apar_theta",
-        "entropy_transfer_bpar_theta",
-    ]
-    enabled_diagnostics = [d for d in all_diags if d in ds]
+    transfer_sign = -1 if fix_transfer_sign else 1
 
-    entropy_sign = -1 if fix_entropy_sign else 1
-    entropy_diags = {
-        "entropy_transfer_phi_theta",
-        "entropy_transfer_apar_theta",
-        "entropy_transfer_bpar_theta",
-    }
-
-    # Create output directory if it doesn't exist
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     theta = ds["theta"].values
 
-    labels = {
-        "kinetic_energy_transfer_theta": r"$T_v^\text{ZF}$",
-        "entropy_transfer_phi_theta": r"$T_{S,\phi}^\text{ZF}$",
-        "entropy_transfer_apar_theta": r"$T_{S,A_\parallel}^\text{ZF}$",
-        "entropy_transfer_bpar_theta": r"$T_{S,B_\parallel}^\text{ZF}$"
-    }
-
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 5))
-
     if window is not None:
         if tstart is None:
             tstart = float(ds["t"].values[-1]) - window
         tend = tstart + window
-
         if filename is None:
             filename = "transfer_by_theta_averaged.png"
+        title = f"Averaged over t = [{tstart:.1f}, {tend:.1f}]"
 
-        for diag in enabled_diagnostics:
-            sign = entropy_sign if diag in entropy_diags else 1
-            transfer_avg = sign * ds[diag].sel(t=slice(tstart, tend)).mean(dim="t").values
-            ax.plot(theta, transfer_avg, linewidth=1.5, label=labels[diag])
-
-        ax.set_title(f"Averaged over t = [{tstart:.1f}, {tend:.1f}]")
+        def reduce(name):
+            if name not in ds:
+                return None
+            return ds[name].sel(t=slice(tstart, tend)).mean(dim="t").values
     else:
         if filename is None:
             filename = "transfer_by_theta.png"
+        title = None
 
-        for diag in enabled_diagnostics:
-            sign = entropy_sign if diag in entropy_diags else 1
-            transfer = sign * ds[diag].isel(t=-1).values
-            ax.plot(theta, transfer, linewidth=1.5, label=labels[diag])
+        def reduce(name):
+            if name not in ds:
+                return None
+            da = ds[name]
+            return da.isel(t=-1).values if "t" in da.dims else da.values
 
+    # Assemble curves as (label, values, linestyle). Kinetic energy keeps its
+    # native sign; H/S/U are sign-corrected together.
+    curves: list[tuple[str, np.ndarray, str]] = []
+
+    ke = reduce("kinetic_energy_transfer_theta")
+    if ke is not None:
+        curves.append((_KINETIC_LABEL, ke, "-"))
+
+    for field, sym in _FIELD_SYMS.items():
+        H = reduce(f"free_energy_transfer_{field}_theta")
+        S = reduce(f"entropy_transfer_{field}_theta")
+        if H is not None:
+            curves.append((_drive_label("H", field), transfer_sign * H, "-"))
+        if S is not None:
+            curves.append((_drive_label("S", field), transfer_sign * S, "-"))
+        if H is not None and S is not None:
+            curves.append((_drive_label("U", field), transfer_sign * (H + S), "--"))
+
+    if not curves:
+        raise ValueError("No transfer diagnostics found in dataset.")
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for label, values, linestyle in curves:
+        if normalise:
+            # Movie-wide divisor if supplied, else self-normalise to own peak.
+            divisor = norm_factors.get(label, 0.0) if norm_factors is not None \
+                else np.nanmax(np.abs(values))
+            if divisor > 0:
+                values = values / divisor
+        ax.plot(theta, values, linewidth=1.5, linestyle=linestyle, label=label)
+
+    if title is not None:
+        ax.set_title(title)
+    ax.axhline(0, color="k", linewidth=0.6, alpha=0.5)
+    if ylim is not None:
+        ax.set_ylim(ylim)
     ax.set_xlabel(r"$\theta$", fontsize=12)
-    ax.set_ylabel("transfer", fontsize=12)
+    ax.set_ylabel("normalised transfer" if normalise else "transfer", fontsize=12)
     ax.legend()
     ax.grid(alpha=0.3)
     plt.tight_layout()
 
-    # Save figure
     output_path = output_dir / filename
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.savefig(output_path, dpi=150, bbox_inches="tight" if tight_bbox else None)
     plt.close(fig)
 
     if not _quiet:
@@ -205,7 +360,8 @@ def plot_transfer_by_theta_movie(
     tstart: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    fix_entropy_sign: bool = True,
+    fix_transfer_sign: bool = True,
+    normalise: bool | str = False,
     fps: int = 10,
     crf: int = 18,
     verbose: bool = False,
@@ -240,10 +396,21 @@ def plot_transfer_by_theta_movie(
     filename : str, optional
         Filename for the output movie. If None, uses
         "transfer_by_theta_movie.mp4".
-    fix_entropy_sign : bool, optional
-        If True (default), multiplies entropy transfer diagnostics by -1 to
-        correct a sign error in the GS2 implementation. Does not affect the
-        kinetic energy transfer. Passed through to each frame's plot call.
+    fix_transfer_sign : bool, optional
+        If True (default), multiplies the free-energy, entropy and U drives by
+        -1 to correct a sign error in the GS2 implementation. Does not affect
+        the kinetic-energy transfer. Passed through to each frame's plot call.
+    normalise : bool or str, optional
+        Controls amplitude normalisation; the y-axis is fixed to [-1, 1] when
+        enabled. Default is False (off).
+
+        * ``False`` — no normalisation.
+        * ``True`` or ``"frame"`` — per-frame: each frame divides every curve
+          by *that frame's* own peak. Reveals structure but discards both
+          relative amplitude between curves and growth/decay over time.
+        * ``"movie"`` — movie-wide: each curve is divided by a single fixed
+          divisor (its peak over all frames), so relative amplitude and
+          time evolution are preserved while small terms are scaled into view.
     fps : int, optional
         Frames per second for the output movie. Default is 10.
     crf : int, optional
@@ -278,6 +445,24 @@ def plot_transfer_by_theta_movie(
 
     t_values = ds["t"].values
 
+    # Resolve the normalisation mode.
+    norm_mode = ("movie" if normalise == "movie" else "frame") if normalise else None
+
+    # Fix the y-axis across all frames so the curves don't jump around, and
+    # save frames at a constant canvas size (tight_bbox=False) as ffmpeg
+    # requires every frame to share the same pixel dimensions. When
+    # normalising, every curve is bounded by [-1, 1], so use a fixed axis.
+    if norm_mode is None:
+        frame_normalise = False
+        norm_factors = None
+        transfer_sign = -1 if fix_transfer_sign else 1
+        ylim = _global_theta_ylim(ds, frame_indices, transfer_sign)
+    else:
+        frame_normalise = True
+        # Movie-wide: one fixed divisor per curve; per-frame: self-normalise.
+        norm_factors = _movie_norm_factors(ds, frame_indices) if norm_mode == "movie" else None
+        ylim = (-1.05, 1.05)
+
     n_frames = len(frame_indices)
     if verbose:
         print(f"Generating {n_frames} frames...")
@@ -286,13 +471,17 @@ def plot_transfer_by_theta_movie(
     for frame_num, t_idx in enumerate(frame_indices):
         frame_filename = f"frame_{frame_num:06d}.png"
         if window is not None:
-            _ = plot_transfer_by_theta(
+            plot_transfer_by_theta(
                 ds,
                 window=window,
                 tstart=float(t_values[t_idx]),
                 output_dir=frames_dir,
                 filename=frame_filename,
-                fix_entropy_sign=fix_entropy_sign,
+                fix_transfer_sign=fix_transfer_sign,
+                normalise=frame_normalise,
+                norm_factors=norm_factors,
+                ylim=ylim,
+                tight_bbox=False,
                 _quiet=True,
             )
         else:
@@ -302,7 +491,11 @@ def plot_transfer_by_theta_movie(
                 ds.isel(t=slice(t_idx, t_idx + 1)),
                 output_dir=frames_dir,
                 filename=frame_filename,
-                fix_entropy_sign=fix_entropy_sign,
+                fix_transfer_sign=fix_transfer_sign,
+                normalise=frame_normalise,
+                norm_factors=norm_factors,
+                ylim=ylim,
+                tight_bbox=False,
                 _quiet=True,
             )
         if verbose:
@@ -323,18 +516,19 @@ def plot_vel_transfer_by_theta_by_sign(
     tstart: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    fix_entropy_sign: bool = True,
+    fix_transfer_sign: bool = True,
+    tight_bbox: bool = True,
     _quiet: bool = False,
 ) -> Path:
-    """Plot the poloidal structure of the velocity-resolved entropy transfer,
+    """Plot the poloidal structure of the velocity-resolved nonlinear drives,
     integrated over velocity space.
 
-    Each enabled velocity-resolved diagnostic in `ds` is weighted by the
-    velocity-space integration weights `wl(lambda, theta)` and
-    `w(species, egrid)` before summing over all non-theta dimensions except
-    `sign`. The two parallel-velocity directions (sign=1: vpa > 0,
-    sign=2: vpa < 0) are plotted as separate curves (solid and
-    dashed respectively) on the same axis.
+    Each velocity-resolved free-energy (H) and entropy (S) diagnostic in `ds`
+    is weighted by the velocity-space integration weights `wl(lambda, theta)`
+    and `w(species, egrid)` before summing over all non-theta dimensions
+    except `sign`. The derived fluctuation energy U = H + S is also plotted.
+    The two parallel-velocity directions (sign=1: vpa > 0, sign=2: vpa < 0)
+    are plotted as separate curves (solid and dashed respectively).
 
     By default, plots the last time step. If `window` is provided, the
     diagnostics are averaged over a time window instead.
@@ -343,7 +537,7 @@ def plot_vel_transfer_by_theta_by_sign(
     ----------
     ds : xarray.Dataset
         GS2 output dataset (loaded from `.out.nc` file). Expected to contain
-        one or more of the diagnostics listed below, each with dims
+        one or more velocity-resolved diagnostics, each with dims
         `(t, species, sign, lambda, egrid, theta, kxt_shift)`.
     grids_nc : str or Path, optional
         Path to a `.grids.nc` file produced by `dump_grids`. Used to load
@@ -360,9 +554,13 @@ def plot_vel_transfer_by_theta_by_sign(
     filename : str, optional
         Filename for the plot. If None, uses `"vel_transfer_by_theta.png"`
         (or `"vel_transfer_by_theta_averaged.png"` when averaging).
-    fix_entropy_sign : bool, optional
-        If True (default), multiplies entropy transfer diagnostics by -1 to
-        correct a sign error in the GS2 implementation.
+    fix_transfer_sign : bool, optional
+        If True (default), multiplies the free-energy, entropy and U drives by
+        -1 to correct a sign error in the GS2 implementation.
+    tight_bbox : bool, optional
+        If True (default), save with ``bbox_inches="tight"``. Movie frames
+        pass False so every frame has identical pixel dimensions (a
+        requirement for the ffmpeg encoder).
 
     Returns
     -------
@@ -372,25 +570,15 @@ def plot_vel_transfer_by_theta_by_sign(
     Raises
     ------
     ValueError
-        If `tstart` is given without `window`.
+        If `tstart` is given without `window`, or if no velocity-resolved
+        diagnostics are present in `ds`.
     MissingWeightsError
         If `wl` and `w` cannot be found in `ds` or `grids_nc`.
     """
     if tstart is not None and window is None:
         raise ValueError("`tstart` requires `window` to be specified.")
 
-    all_diags = [
-        "entropy_transfer_phi_velocity",
-        "entropy_transfer_apar_velocity",
-        "entropy_transfer_bpar_velocity",
-    ]
-    enabled_diagnostics = [d for d in all_diags if d in ds]
-
-    labels = {
-        "entropy_transfer_phi_velocity":  r"$T_{S,\phi}^\text{ZF}$",
-        "entropy_transfer_apar_velocity": r"$T_{S,A_\parallel}^\text{ZF}$",
-        "entropy_transfer_bpar_velocity": r"$T_{S,B_\parallel}^\text{ZF}$",
-    }
+    transfer_sign = -1 if fix_transfer_sign else 1
 
     weights = get_weights(ds, grids_nc=grids_nc)
     wl = weights["wl"]  # dims (lambda, theta)
@@ -409,48 +597,57 @@ def plot_vel_transfer_by_theta_by_sign(
         sign_values[1]: r"$v_\parallel < 0$",
     }
 
-    entropy_sign = -1 if fix_entropy_sign else 1
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-
     if window is not None:
         if tstart is None:
             tstart = float(ds["t"].values[-1]) - window
         tend = tstart + window
-
         if filename is None:
             filename = "vel_transfer_by_theta_averaged.png"
+        title = f"Averaged over t = [{tstart:.1f}, {tend:.1f}]"
 
-        for diag in enabled_diagnostics:
-            for s in sign_values:
-                # Average over the time window per diagnostic, then weight and
-                # sum over velocity dimensions to get the theta-dependent transfer.
-                transfer = entropy_sign * (
-                    ds[diag].sel(t=slice(tstart, tend), sign=s).mean(dim="t") * wl * w
-                ).sum(dim=["species", "lambda", "egrid", "kxt_shift"])
-
-                ax.plot(theta, transfer.values, linewidth=1.5,
-                        linestyle=sign_styles[s],
-                        label=f"{labels[diag]}, {sign_labels[s]}")
-
-        ax.set_title(f"Averaged over t = [{tstart:.1f}, {tend:.1f}]")
+        def reduce(name):
+            """Weighted (sign, theta) profile for `name`, or None if absent."""
+            if name not in ds:
+                return None
+            da = ds[name].sel(t=slice(tstart, tend)).mean(dim="t")
+            return (da * wl * w).sum(dim=["species", "lambda", "egrid", "kxt_shift"])
     else:
         if filename is None:
             filename = "vel_transfer_by_theta.png"
+        title = None
 
-        for diag in enabled_diagnostics:
-            for s in sign_values:
-                # Multiply by velocity-space weights, then sum over all non-theta
-                # dimensions (excluding sign) to obtain the theta-dependent transfer.
-                diag_da = ds[diag].isel(t=-1) if "t" in ds[diag].dims else ds[diag]
-                transfer = entropy_sign * (
-                    diag_da.sel(sign=s) * wl * w
-                ).sum(dim=["species", "lambda", "egrid", "kxt_shift"])
+        def reduce(name):
+            if name not in ds:
+                return None
+            da = ds[name]
+            da = da.isel(t=-1) if "t" in da.dims else da
+            return (da * wl * w).sum(dim=["species", "lambda", "egrid", "kxt_shift"])
 
-                ax.plot(theta, transfer.values, linewidth=1.5,
-                        linestyle=sign_styles[s],
-                        label=f"{labels[diag]}, {sign_labels[s]}")
+    # Assemble curves as (label, DataArray over (sign, theta)).
+    curves: list[tuple[str, xr.DataArray]] = []
+    for field, sym in _FIELD_SYMS.items():
+        H = reduce(f"free_energy_transfer_{field}_velocity")
+        S = reduce(f"entropy_transfer_{field}_velocity")
+        if H is not None:
+            curves.append((_drive_label("H", field), transfer_sign * H))
+        if S is not None:
+            curves.append((_drive_label("S", field), transfer_sign * S))
+        if H is not None and S is not None:
+            curves.append((_drive_label("U", field), transfer_sign * (H + S)))
 
+    if not curves:
+        raise ValueError("No velocity-resolved transfer diagnostics found in dataset.")
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for label, transfer in curves:
+        for s in sign_values:
+            ax.plot(theta, transfer.sel(sign=s).values, linewidth=1.5,
+                    linestyle=sign_styles[s],
+                    label=f"{label}, {sign_labels[s]}")
+
+    if title is not None:
+        ax.set_title(title)
+    ax.axhline(0, color="k", linewidth=0.6, alpha=0.5)
     ax.set_xlabel(r"$\theta$", fontsize=12)
     ax.set_ylabel("transfer", fontsize=12)
     ax.legend()
@@ -458,7 +655,7 @@ def plot_vel_transfer_by_theta_by_sign(
     plt.tight_layout()
 
     output_path = output_dir / filename
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.savefig(output_path, dpi=150, bbox_inches="tight" if tight_bbox else None)
     plt.close(fig)
 
     if not _quiet:
@@ -473,17 +670,20 @@ def plot_vel_transfer_theta_lambda(
     tstart: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    fix_entropy_sign: bool = True,
+    fix_transfer_sign: bool = True,
+    tight_bbox: bool = True,
     _quiet: bool = False,
 ) -> Path:
-    """Plot 2D heatmaps of the entropy transfer in lambda-theta space.
+    """Plot 2D heatmaps of the velocity-resolved nonlinear drives in
+    lambda-theta space.
 
-    For each enabled velocity-resolved diagnostic, shows a row of two subplots
-    side by side — one for each parallel-velocity sign (sign=1: vpa > 0,
-    sign=2: vpa < 0). The x-axis is `theta`, the y-axis is `lambda`. Each
-    cell is weighted by `wl(lambda, theta)` and `w(species, egrid)` and summed
-    over `species`, `egrid`, and `kxt_shift`, so that integrating along the
-    lambda axis of either panel recovers the corresponding curve in
+    For each velocity-resolved drive (free energy H, entropy S, and derived
+    U = H + S, per field), shows a row of two subplots side by side — one for
+    each parallel-velocity sign (sign=1: vpa > 0, sign=2: vpa < 0). The x-axis
+    is `theta`, the y-axis is `lambda`. Each cell is weighted by
+    `wl(lambda, theta)` and `w(species, egrid)` and summed over `species`,
+    `egrid`, and `kxt_shift`, so that integrating along the lambda axis of
+    either panel recovers the corresponding curve in
     `plot_vel_transfer_by_theta_by_sign`.
 
     A symmetric diverging colormap (`RdBu_r`) is used with a per-row shared
@@ -513,9 +713,13 @@ def plot_vel_transfer_theta_lambda(
     filename : str, optional
         Filename for the plot. If None, uses `"vel_transfer_theta_lambda.png"`
         (or `"vel_transfer_theta_lambda_averaged.png"` when averaging).
-    fix_entropy_sign : bool, optional
-        If True (default), multiplies entropy transfer diagnostics by -1 to
-        correct a sign error in the GS2 implementation.
+    fix_transfer_sign : bool, optional
+        If True (default), multiplies the free-energy, entropy and U drives by
+        -1 to correct a sign error in the GS2 implementation.
+    tight_bbox : bool, optional
+        If True (default), save with ``bbox_inches="tight"``. Movie frames
+        pass False so every frame has identical pixel dimensions (a
+        requirement for the ffmpeg encoder).
 
     Returns
     -------
@@ -525,25 +729,15 @@ def plot_vel_transfer_theta_lambda(
     Raises
     ------
     ValueError
-        If `tstart` is given without `window`.
+        If `tstart` is given without `window`, or if no velocity-resolved
+        diagnostics are present in `ds`.
     MissingWeightsError
         If `wl` and `w` cannot be found in `ds` or `grids_nc`.
     """
     if tstart is not None and window is None:
         raise ValueError("`tstart` requires `window` to be specified.")
 
-    all_diags = [
-        "entropy_transfer_phi_velocity",
-        "entropy_transfer_apar_velocity",
-        "entropy_transfer_bpar_velocity",
-    ]
-    enabled_diagnostics = [d for d in all_diags if d in ds]
-
-    diag_labels = {
-        "entropy_transfer_phi_velocity":  r"$T_{S,\phi}^\text{ZF}$",
-        "entropy_transfer_apar_velocity": r"$T_{S,A_\parallel}^\text{ZF}$",
-        "entropy_transfer_bpar_velocity": r"$T_{S,B_\parallel}^\text{ZF}$",
-    }
+    transfer_sign = -1 if fix_transfer_sign else 1
 
     weights = get_weights(ds, grids_nc=grids_nc)
     wl = weights["wl"]  # dims (lambda, theta)
@@ -561,41 +755,52 @@ def plot_vel_transfer_theta_lambda(
         sign_values[1]: r"$v_\parallel < 0$",
     }
 
-    entropy_sign = -1 if fix_entropy_sign else 1
-
     if window is not None:
         if tstart is None:
             tstart = float(ds["t"].values[-1]) - window
         tend = tstart + window
-
         if filename is None:
             filename = "vel_transfer_theta_lambda_averaged.png"
-
         time_title = f"Averaged over t = [{tstart:.1f}, {tend:.1f}]"
 
-        def get_transfer(diag):
-            return entropy_sign * (
-                ds[diag].sel(t=slice(tstart, tend)).mean(dim="t") * wl * w
-            ).sum(dim=["species", "egrid", "kxt_shift"])
+        def reduce(name):
+            """Weighted (sign, lambda, theta) field for `name`, or None."""
+            if name not in ds:
+                return None
+            da = ds[name].sel(t=slice(tstart, tend)).mean(dim="t")
+            return (da * wl * w).sum(dim=["species", "egrid", "kxt_shift"])
     else:
         if filename is None:
             filename = "vel_transfer_theta_lambda.png"
-
         time_title = None
 
-        def get_transfer(diag):
-            diag_da = ds[diag].isel(t=-1) if "t" in ds[diag].dims else ds[diag]
-            return entropy_sign * (diag_da * wl * w).sum(dim=["species", "egrid", "kxt_shift"])
+        def reduce(name):
+            if name not in ds:
+                return None
+            da = ds[name]
+            da = da.isel(t=-1) if "t" in da.dims else da
+            return (da * wl * w).sum(dim=["species", "egrid", "kxt_shift"])
 
-    n_diags = len(enabled_diagnostics)
-    fig, axes = plt.subplots(n_diags, 2, figsize=(12, 5 * n_diags), sharey=True,
+    # One row per drive: (label, DataArray over (sign, lambda, theta)).
+    rows: list[tuple[str, xr.DataArray]] = []
+    for field, sym in _FIELD_SYMS.items():
+        H = reduce(f"free_energy_transfer_{field}_velocity")
+        S = reduce(f"entropy_transfer_{field}_velocity")
+        if H is not None:
+            rows.append((_drive_label("H", field), transfer_sign * H))
+        if S is not None:
+            rows.append((_drive_label("S", field), transfer_sign * S))
+        if H is not None and S is not None:
+            rows.append((_drive_label("U", field), transfer_sign * (H + S)))
+
+    if not rows:
+        raise ValueError("No velocity-resolved transfer diagnostics found in dataset.")
+
+    n_rows = len(rows)
+    fig, axes = plt.subplots(n_rows, 2, figsize=(12, 5 * n_rows), sharey=True,
                              squeeze=False)
 
-    for row, diag in enumerate(enabled_diagnostics):
-        # Compute weighted transfer: sum over species, egrid, kxt_shift.
-        # Result has dims (sign, lambda, theta).
-        transfer = get_transfer(diag)
-
+    for row, (label, transfer) in enumerate(rows):
         # Symmetric colour limits so zero is always centred.
         vmax = float(abs(transfer).max())
         vmin = -vmax
@@ -607,7 +812,7 @@ def plot_vel_transfer_theta_lambda(
             im = ax.pcolormesh(theta, lam, data, cmap="RdBu_r", vmin=vmin, vmax=vmax,
                                shading="auto")
             images.append(im)
-            ax.set_title(f"{diag_labels[diag]}, {sign_titles[s]}")
+            ax.set_title(f"{label}, {sign_titles[s]}")
             ax.set_xlabel(r"$\theta$", fontsize=12)
 
         row_axes[0].set_ylabel(r"$\lambda$", fontsize=12)
@@ -617,7 +822,7 @@ def plot_vel_transfer_theta_lambda(
         fig.suptitle(time_title, fontsize=12)
 
     output_path = output_dir / filename
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.savefig(output_path, dpi=150, bbox_inches="tight" if tight_bbox else None)
     plt.close(fig)
 
     if not _quiet:
@@ -632,7 +837,7 @@ def plot_vel_transfer_theta_lambda_movie(
     window: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    fix_entropy_sign: bool = True,
+    fix_transfer_sign: bool = True,
     fps: int = 10,
     crf: int = 18,
     verbose: bool = False,
@@ -661,9 +866,9 @@ def plot_vel_transfer_theta_lambda_movie(
     filename : str, optional
         Filename for the output movie. If None, uses
         `"vel_transfer_theta_lambda_movie.mp4"`.
-    fix_entropy_sign : bool, optional
-        If True (default), multiplies entropy transfer diagnostics by -1 to
-        correct a sign error in the GS2 implementation. Passed through to
+    fix_transfer_sign : bool, optional
+        If True (default), multiplies the free-energy, entropy and U drives by
+        -1 to correct a sign error in the GS2 implementation. Passed through to
         each frame's plot call.
     fps : int, optional
         Frames per second. Default is 10.
@@ -710,7 +915,8 @@ def plot_vel_transfer_theta_lambda_movie(
                 tstart=float(t_values[t_idx]),
                 output_dir=frames_dir,
                 filename=frame_filename,
-                fix_entropy_sign=fix_entropy_sign,
+                fix_transfer_sign=fix_transfer_sign,
+                tight_bbox=False,
                 _quiet=True,
             )
         else:
@@ -719,7 +925,8 @@ def plot_vel_transfer_theta_lambda_movie(
                 grids_nc=grids_nc,
                 output_dir=frames_dir,
                 filename=frame_filename,
-                fix_entropy_sign=fix_entropy_sign,
+                fix_transfer_sign=fix_transfer_sign,
+                tight_bbox=False,
                 _quiet=True,
             )
         if verbose:
@@ -739,7 +946,7 @@ def plot_vel_transfer_by_theta_by_sign_movie(
     window: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    fix_entropy_sign: bool = True,
+    fix_transfer_sign: bool = True,
     fps: int = 10,
     crf: int = 18,
     verbose: bool = False,
@@ -772,9 +979,9 @@ def plot_vel_transfer_by_theta_by_sign_movie(
     filename : str, optional
         Filename for the output movie. If None, uses
         `"vel_transfer_by_theta_by_sign_movie.mp4"`.
-    fix_entropy_sign : bool, optional
-        If True (default), multiplies entropy transfer diagnostics by -1 to
-        correct a sign error in the GS2 implementation. Passed through to
+    fix_transfer_sign : bool, optional
+        If True (default), multiplies the free-energy, entropy and U drives by
+        -1 to correct a sign error in the GS2 implementation. Passed through to
         each frame's plot call.
     fps : int, optional
         Frames per second. Default is 10.
@@ -821,7 +1028,8 @@ def plot_vel_transfer_by_theta_by_sign_movie(
                 tstart=float(t_values[t_idx]),
                 output_dir=frames_dir,
                 filename=frame_filename,
-                fix_entropy_sign=fix_entropy_sign,
+                fix_transfer_sign=fix_transfer_sign,
+                tight_bbox=False,
                 _quiet=True,
             )
         else:
@@ -830,7 +1038,8 @@ def plot_vel_transfer_by_theta_by_sign_movie(
                 grids_nc=grids_nc,
                 output_dir=frames_dir,
                 filename=frame_filename,
-                fix_entropy_sign=fix_entropy_sign,
+                fix_transfer_sign=fix_transfer_sign,
+                tight_bbox=False,
                 _quiet=True,
             )
         if verbose:
