@@ -86,7 +86,7 @@ def plot_weights(
     fig.colorbar(pcm, ax=ax_wl)
     ax_wl.set_xlabel(r"$\theta$", fontsize=12)
     ax_wl.set_ylabel(r"$\lambda$", fontsize=12)
-    ax_wl.set_title("w_l(\lambda, \theta)")
+    ax_wl.set_title(r"$w_\lambda(\lambda, \theta)$")
 
     plt.tight_layout()
 
