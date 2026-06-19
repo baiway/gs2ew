@@ -15,3 +15,6 @@ wheels/
 
 # Output files and plots
 outputs/
+
+# macOS
+.DS_Store
