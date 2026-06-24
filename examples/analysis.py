@@ -58,11 +58,19 @@ with ds:
     # Transfer at the last timestep
     plot_transfer_by_theta(ds, output_dir=args.output_dir)
 
-    # Transfer averaged over a time window (adjust tstart and window to taste)
-    # plot_transfer_by_theta(ds, window=100.0, output_dir=args.output_dir)
+    # Transfer averaged over a time window, with ±1 std bands showing the
+    # temporal spread over the window (adjust tstart and window to taste).
+    plot_transfer_by_theta(
+        ds, window=60.0, show_std=True, normalise=True, output_dir=args.output_dir
+    )
 
-    # Movie of the rolling-averaged transfer
-    # plot_transfer_by_theta_movie(ds, window=100.0, fps=15, output_dir=args.output_dir)
+    # Movie of the transfer over time, starting at t = 60. normalise="movie"
+    # divides each curve by a single fixed factor (its peak over the whole
+    # timeseries), so small terms like U are scaled into view while the relative
+    # amplitudes between curves and their growth/decay over time are preserved.
+    plot_transfer_by_theta_movie(
+        ds, tstart=60.0, normalise="movie", fps=15, output_dir=args.output_dir
+    )
 
     # ── Velocity-resolved transfer (needs write_*_transfer_velocity output) ──────
 
