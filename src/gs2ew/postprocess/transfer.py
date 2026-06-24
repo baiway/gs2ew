@@ -211,6 +211,7 @@ def plot_transfer_by_theta(
     normalise: bool = False,
     norm_factors: dict[str, float] | None = None,
     show_std: bool = False,
+    saturation_pad: float = 0.25,
     ylim: tuple[float, float] | None = None,
     figsize: tuple[float, float] | None = None,
     tight_bbox: bool = True,
@@ -246,7 +247,8 @@ def plot_transfer_by_theta(
         average runs from this time to the end of the run; given with `window`,
         it averages ``[tstart, tstart + window]``. To average from the detected
         saturation point to the end of the run, pass ``tstart="saturation"``
-        and leave `window` unset.
+        and leave `window` unset; in that case the start is padded past the
+        detected time (see `saturation_pad`).
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is "outputs".
     filename : str, optional
@@ -271,6 +273,12 @@ def plot_transfer_by_theta(
         deviation band, where the standard deviation is taken over the
         timesteps in the averaging window. Ignored when not averaging (a single
         timestep has no spread). Default is False.
+    saturation_pad : float, optional
+        Only used when ``tstart="saturation"``. Fraction of the post-saturation
+        interval to skip before averaging, so the tail of the linear phase does
+        not pollute the result: the start becomes
+        ``tsat + saturation_pad * (t[-1] - tsat)``. Default is 0.25; set to 0
+        to average from the detected saturation time itself.
     ylim : tuple of float, optional
         Fixed (ymin, ymax) for the y-axis. Used by the movie helper to keep
         the axis steady across frames; if None, matplotlib autoscales.
@@ -309,11 +317,15 @@ def plot_transfer_by_theta(
                 f"Unknown tstart {tstart!r}; expected a float or 'saturation'."
             )
         try:
-            tstart = float(_detect_saturation_time(ds))
-            if np.isnan(tstart):
+            tsat = float(_detect_saturation_time(ds))
+            if np.isnan(tsat):
                 raise ValueError
+            # Pad past the detected saturation time so the tail of the linear
+            # phase doesn't pollute the average.
+            tstart = tsat + saturation_pad * (float(t_values[-1]) - tsat)
             if not _quiet:
-                print(f"Using detected saturation time tstart = {tstart:.2f}")
+                print(f"Detected saturation time tsat = {tsat:.2f}; averaging "
+                      f"from tstart = {tstart:.2f} (saturation_pad = {saturation_pad:g}).")
         except (KeyError, ValueError):
             tstart = float(t_values[0])
             if not _quiet:
