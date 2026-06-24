@@ -204,7 +204,7 @@ def _stitch_frames_to_movie(
 def plot_transfer_by_theta(
     ds: xr.Dataset,
     window: float | None = None,
-    tstart: float | None = None,
+    tstart: float | str | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
     fix_transfer_sign: bool = True,
@@ -236,10 +236,17 @@ def plot_transfer_by_theta(
     window : float, optional
         Duration of the averaging window. If provided without `tstart`,
         averages over the last `window` time units. If provided with
-        `tstart`, averages from `tstart` over length `window`.
-    tstart : float, optional
-        Start time for the averaging window. Requires `window` to be set;
-        raises ValueError if `window` is not provided.
+        `tstart`, averages from `tstart` over length `window`. If omitted but
+        `tstart` is given, averages from `tstart` to the end of the run.
+    tstart : float or str, optional
+        Start time for the averaging window. May be a numeric time, or the
+        string ``"saturation"`` to auto-detect the saturation time via
+        ``detect_saturation_time`` (falling back to the start of the run, with
+        a warning, if it cannot be determined). Given without `window`, the
+        average runs from this time to the end of the run; given with `window`,
+        it averages ``[tstart, tstart + window]``. To average from the detected
+        saturation point to the end of the run, pass ``tstart="saturation"``
+        and leave `window` unset.
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is "outputs".
     filename : str, optional
@@ -284,27 +291,45 @@ def plot_transfer_by_theta(
     Raises
     ------
     ValueError
-        If `tstart` is given without `window`, or if no transfer diagnostics
+        If `tstart` is an unrecognised string, or if no transfer diagnostics
         are present in `ds`.
     """
-    if tstart is not None and window is None:
-        raise ValueError("`tstart` requires `window` to be specified.")
-
     transfer_sign = -1 if fix_transfer_sign else 1
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     theta = ds["theta"].values
+    t_values = ds["t"].values
 
-    # Whether to compute per-theta temporal spread (only meaningful when
-    # averaging over more than one timestep).
-    compute_std = show_std and window is not None
+    # Resolve a symbolic start time ("saturation") to a numeric value.
+    if isinstance(tstart, str):
+        if tstart != "saturation":
+            raise ValueError(
+                f"Unknown tstart {tstart!r}; expected a float or 'saturation'."
+            )
+        try:
+            tstart = float(_detect_saturation_time(ds))
+            if np.isnan(tstart):
+                raise ValueError
+            if not _quiet:
+                print(f"Using detected saturation time tstart = {tstart:.2f}")
+        except (KeyError, ValueError):
+            tstart = float(t_values[0])
+            if not _quiet:
+                print("Warning: saturation time could not be detected; "
+                      "averaging from the start of the run.")
 
-    if window is not None:
+    # Average whenever a window or an explicit start time is given; otherwise
+    # plot a single (last) timestep. A start time with no window averages from
+    # that time to the end of the run.
+    averaging = window is not None or tstart is not None
+    compute_std = show_std and averaging
+
+    if averaging:
         if tstart is None:
-            tstart = float(ds["t"].values[-1]) - window
-        tend = tstart + window
+            tstart = float(t_values[-1]) - window
+        tend = tstart + window if window is not None else float(t_values[-1])
         if filename is None:
             filename = "transfer_by_theta_averaged.png"
         title = f"Averaged over t = [{tstart:.1f}, {tend:.1f}]"
