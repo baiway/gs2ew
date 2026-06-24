@@ -46,15 +46,17 @@ _KINETIC_LABEL = r"$T_v^\text{ZF}$"
 def _drive_label(quantity_sym: str, field: str) -> str:
     """LaTeX label for a nonlinear drive, e.g. ``$N_\\mathbf{k}^{H,\\phi}$``.
 
-    Fluctuation energy U gets an expanded label spelling out U = H + sum_s T_s S.
+    The same form is used for every quantity, including the derived
+    fluctuation energy U (``$N_\\mathbf{k}^{U,\\phi}$``).
     """
     sym = _FIELD_SYMS[field]
-    if quantity_sym == "U":
-        return (
-            rf"$U_\mathbf{{k}} = H_\mathbf{{k}} + \sum_s T_s S_{{s\mathbf{{k}}}}, "
-            rf"\, N_\mathbf{{k}}^U$ (${sym}$)"
-        )
     return rf"$N_\mathbf{{k}}^{{{quantity_sym},{sym}}}$"
+
+
+def _drive_label_short(quantity_sym: str) -> str:
+    """Field-free drive label, e.g. ``$N_\\mathbf{k}^{H}$``, used as the legend
+    entry in faceted plots where the field is shown as the column title."""
+    return rf"$N_\mathbf{{k}}^{{{quantity_sym}}}$"
 
 
 def _global_theta_ylim(
@@ -208,15 +210,21 @@ def plot_transfer_by_theta(
     fix_transfer_sign: bool = True,
     normalise: bool = False,
     norm_factors: dict[str, float] | None = None,
+    show_std: bool = False,
     ylim: tuple[float, float] | None = None,
+    figsize: tuple[float, float] | None = None,
     tight_bbox: bool = True,
     _quiet: bool = False,
 ) -> Path:
-    """Plots the poloidal structure of each enabled transfer diagnostic.
+    """Plots the poloidal structure of each enabled transfer diagnostic,
+    faceted into one column per field.
 
-    Plots the kinetic-energy transfer alongside the free-energy (H), entropy
-    (S) and derived fluctuation-energy (U = H + S) nonlinear drives, for each
-    field (``phi``, ``apar``, ``bpar``) present in `ds`.
+    Each field (``phi``, ``apar``, ``bpar``) present in `ds` gets its own column
+    (subplot), sharing a common y-axis. Within a column the derived
+    fluctuation-energy (U = H + S) drive is plotted first (a solid blue line),
+    followed by the free-energy (H) and entropy (S) drives (also solid). The
+    kinetic-energy transfer has no field decomposition, so it is drawn as a
+    dashed line in every column as a common reference.
 
     By default, plots the last time step. If `window` is provided, the
     diagnostics are averaged over a time window instead.
@@ -251,9 +259,18 @@ def plot_transfer_by_theta(
         If given, each curve is divided by its supplied factor instead of its
         own peak; this is how the movie helper applies a fixed, movie-wide
         normalisation. If None, each curve self-normalises to its own peak.
+    show_std : bool, optional
+        If True and `window` is set, shade each curve with a ±1 standard
+        deviation band, where the standard deviation is taken over the
+        timesteps in the averaging window. Ignored when not averaging (a single
+        timestep has no spread). Default is False.
     ylim : tuple of float, optional
         Fixed (ymin, ymax) for the y-axis. Used by the movie helper to keep
         the axis steady across frames; if None, matplotlib autoscales.
+    figsize : tuple of float, optional
+        Figure ``(width, height)`` in inches. If None (default), it is sized
+        automatically as ``(5 * n_fields, 5)`` so each field's column is about
+        5 inches wide regardless of how many fields are present.
     tight_bbox : bool, optional
         If True (default), save with ``bbox_inches="tight"``. Movie frames
         pass False so every frame has identical pixel dimensions (a
@@ -280,6 +297,10 @@ def plot_transfer_by_theta(
 
     theta = ds["theta"].values
 
+    # Whether to compute per-theta temporal spread (only meaningful when
+    # averaging over more than one timestep).
+    compute_std = show_std and window is not None
+
     if window is not None:
         if tstart is None:
             tstart = float(ds["t"].values[-1]) - window
@@ -288,61 +309,117 @@ def plot_transfer_by_theta(
             filename = "transfer_by_theta_averaged.png"
         title = f"Averaged over t = [{tstart:.1f}, {tend:.1f}]"
 
-        def reduce(name):
-            if name not in ds:
-                return None
-            return ds[name].sel(t=slice(tstart, tend)).mean(dim="t").values
+        def stats(da):
+            """(mean, std-or-None) over the averaging window for a DataArray."""
+            sub = da.sel(t=slice(tstart, tend))
+            std = sub.std(dim="t").values if compute_std else None
+            return sub.mean(dim="t").values, std
     else:
         if filename is None:
             filename = "transfer_by_theta.png"
         title = None
 
-        def reduce(name):
-            if name not in ds:
-                return None
-            da = ds[name]
-            return da.isel(t=-1).values if "t" in da.dims else da.values
+        def stats(da):
+            val = da.isel(t=-1).values if "t" in da.dims else da.values
+            return val, None
 
-    # Assemble curves as (label, values, linestyle). Kinetic energy keeps its
-    # native sign; H/S/U are sign-corrected together.
-    curves: list[tuple[str, np.ndarray, str]] = []
+    def reduce(name):
+        """(mean, std-or-None) for a stored variable, or (None, None)."""
+        if name not in ds:
+            return None, None
+        return stats(ds[name])
 
-    ke = reduce("kinetic_energy_transfer_theta")
-    if ke is not None:
-        curves.append((_KINETIC_LABEL, ke, "-"))
+    def reduce_sum(name_a, name_b):
+        """(mean, std-or-None) for the sum of two stored variables.
 
+        The standard deviation is taken on the summed series, not added in
+        quadrature, so it reflects the true temporal spread of U = H + S.
+        """
+        if name_a not in ds or name_b not in ds:
+            return None, None
+        return stats(ds[name_a] + ds[name_b])
+
+    # The kinetic-energy transfer has no field decomposition. It is purely
+    # electrostatic, so it is overplotted (dashed) only on the `phi` column.
+    ke_mean, ke_std = reduce("kinetic_energy_transfer_theta")
+
+    # Build one column of curves per field that has transfer data. Each curve is
+    # (display_label, norm_key, mean, linestyle, std), where `display_label` is
+    # field-free (the field is the column title) and `norm_key` is the full
+    # field-tagged label used to look up movie-wide normalisation factors. U is
+    # listed first so it takes the first colour in each column's cycle (blue); H
+    # and S follow as solid lines. Kinetic energy keeps its native sign; H/S/U
+    # are sign-corrected together. The std band is symmetric, so the sign
+    # correction does not apply to it.
+    columns: list[tuple[str, str, list[tuple]]] = []
     for field, sym in _FIELD_SYMS.items():
-        H = reduce(f"free_energy_transfer_{field}_theta")
-        S = reduce(f"entropy_transfer_{field}_theta")
-        if H is not None:
-            curves.append((_drive_label("H", field), transfer_sign * H, "-"))
-        if S is not None:
-            curves.append((_drive_label("S", field), transfer_sign * S, "-"))
-        if H is not None and S is not None:
-            curves.append((_drive_label("U", field), transfer_sign * (H + S), "--"))
+        h_name = f"free_energy_transfer_{field}_theta"
+        s_name = f"entropy_transfer_{field}_theta"
+        U_mean, U_std = reduce_sum(h_name, s_name)
+        H_mean, H_std = reduce(h_name)
+        S_mean, S_std = reduce(s_name)
+        col: list[tuple] = []
+        if U_mean is not None:
+            col.append((_drive_label_short("U"), _drive_label("U", field),
+                        transfer_sign * U_mean, "-", U_std))
+        if H_mean is not None:
+            col.append((_drive_label_short("H"), _drive_label("H", field),
+                        transfer_sign * H_mean, "-", H_std))
+        if S_mean is not None:
+            col.append((_drive_label_short("S"), _drive_label("S", field),
+                        transfer_sign * S_mean, "-", S_std))
+        if col:
+            columns.append((field, sym, col))
 
-    if not curves:
-        raise ValueError("No transfer diagnostics found in dataset.")
+    # Fall back to a single (field-less) column if only the kinetic transfer is
+    # present, so it still has somewhere to be drawn.
+    if not columns:
+        if ke_mean is None:
+            raise ValueError("No transfer diagnostics found in dataset.")
+        columns = [("phi", None, [])]
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    for label, values, linestyle in curves:
-        if normalise:
-            # Movie-wide divisor if supplied, else self-normalise to own peak.
-            divisor = norm_factors.get(label, 0.0) if norm_factors is not None \
-                else np.nanmax(np.abs(values))
-            if divisor > 0:
-                values = values / divisor
-        ax.plot(theta, values, linewidth=1.5, linestyle=linestyle, label=label)
+    n_cols = len(columns)
+    if figsize is None:
+        figsize = (5 * n_cols, 5)
+
+    fig, axes = plt.subplots(1, n_cols, figsize=figsize, sharey=True, squeeze=False)
+    axes = axes[0]
+
+    for ax, (field, field_sym, col_curves) in zip(axes, columns):
+        specs = list(col_curves)
+        # Kinetic energy is electrostatic: only overplot it on the phi column.
+        if ke_mean is not None and field == "phi":
+            specs.append((_KINETIC_LABEL, _KINETIC_LABEL, ke_mean, "--", ke_std))
+        for disp_label, norm_key, values, linestyle, std in specs:
+            if normalise:
+                # Movie-wide divisor if supplied, else self-normalise to own peak.
+                divisor = norm_factors.get(norm_key, 0.0) if norm_factors is not None \
+                    else np.nanmax(np.abs(values))
+                if divisor > 0:
+                    values = values / divisor
+                    if std is not None:
+                        std = std / divisor
+            line, = ax.plot(theta, values, linewidth=1.5, linestyle=linestyle,
+                            label=disp_label)
+            if std is not None:
+                ax.fill_between(theta, values - std, values + std,
+                                color=line.get_color(), alpha=0.2, linewidth=0)
+
+        if field_sym is not None:
+            ax.set_title(rf"${field_sym}$")
+        ax.axhline(0, color="k", linewidth=0.6, alpha=0.5)
+        if ylim is not None:
+            ax.set_ylim(ylim)
+        ax.set_xlabel(r"$\theta$", fontsize=12)
+        ax.grid(alpha=0.3)
+
+    # Shared y-label on the leftmost column; one legend is enough as every
+    # column carries the same set of curves.
+    axes[0].set_ylabel("normalised transfer" if normalise else "transfer", fontsize=12)
+    axes[0].legend()
 
     if title is not None:
-        ax.set_title(title)
-    ax.axhline(0, color="k", linewidth=0.6, alpha=0.5)
-    if ylim is not None:
-        ax.set_ylim(ylim)
-    ax.set_xlabel(r"$\theta$", fontsize=12)
-    ax.set_ylabel("normalised transfer" if normalise else "transfer", fontsize=12)
-    ax.legend()
-    ax.grid(alpha=0.3)
+        fig.suptitle(title)
     plt.tight_layout()
 
     output_path = output_dir / filename
