@@ -61,7 +61,8 @@ with ds:
     # Transfer averaged over a time window, with ±1 std bands showing the
     # temporal spread over the window (adjust tstart and window to taste).
     plot_transfer_by_theta(
-        ds, window=60.0, show_std=True, normalise=True, output_dir=args.output_dir
+        ds, window=60.0, show_std=True, normalise=True, div_by_bmag2=True,
+        output_dir=args.output_dir,
     )
 
     # Movie of the transfer over time, starting at t = 60. normalise="movie"

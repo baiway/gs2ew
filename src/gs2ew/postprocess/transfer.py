@@ -53,10 +53,15 @@ def _drive_label(quantity_sym: str, field: str) -> str:
     return rf"$N_\mathbf{{k}}^{{{quantity_sym},{sym}}}$"
 
 
-def _drive_label_short(quantity_sym: str) -> str:
+def _drive_label_short(quantity_sym: str, div_by_bmag2: bool = False) -> str:
     """Field-free drive label, e.g. ``$N_\\mathbf{k}^{H}$``, used as the legend
-    entry in faceted plots where the field is shown as the column title."""
-    return rf"$N_\mathbf{{k}}^{{{quantity_sym}}}$"
+    entry in faceted plots where the field is shown as the column title.
+
+    When `div_by_bmag2` is True, a ``/B_0^2`` suffix is appended to reflect the
+    division of the drive by ``bmag**2``.
+    """
+    suffix = r"/B_0^2" if div_by_bmag2 else ""
+    return rf"$N_\mathbf{{k}}^{{{quantity_sym}}}{suffix}$"
 
 
 def _global_theta_ylim(
@@ -208,6 +213,7 @@ def plot_transfer_by_theta(
     output_dir: str | Path = "outputs",
     filename: str | None = None,
     fix_transfer_sign: bool = True,
+    div_by_bmag2: bool = False,
     normalise: bool = False,
     norm_factors: dict[str, float] | None = None,
     show_std: bool = False,
@@ -258,6 +264,11 @@ def plot_transfer_by_theta(
         If True (default), multiplies the free-energy, entropy and U drives by
         -1 to correct a sign error in the GS2 implementation. Does not affect
         the kinetic-energy transfer.
+    div_by_bmag2 : bool, optional
+        If True, divide the free-energy (H), entropy (S) and fluctuation-energy
+        (U) drives by ``bmag**2``. Since ``bmag`` varies with theta this
+        reshapes each poloidal profile. The kinetic-energy transfer is left
+        unchanged. Requires ``bmag`` to be present in `ds`. Default is False.
     normalise : bool, optional
         If True, divide each curve by its peak absolute value so all curves
         span [-1, 1] and their poloidal structure can be compared regardless of
@@ -376,6 +387,19 @@ def plot_transfer_by_theta(
             return None, None
         return stats(ds[name_a] + ds[name_b])
 
+    # Optional division of the field drives (H, S, U) by bmag**2. bmag depends
+    # on theta, so this reshapes each profile; the kinetic transfer is untouched.
+    if div_by_bmag2:
+        if "bmag" not in ds:
+            raise ValueError("`div_by_bmag2=True` requires `bmag` in the dataset.")
+        bmag2 = ds["bmag"].values ** 2
+    else:
+        bmag2 = None
+
+    def _scale(arr):
+        """Divide a theta profile by bmag**2 when requested (no-op otherwise)."""
+        return arr if (arr is None or bmag2 is None) else arr / bmag2
+
     # The kinetic-energy transfer has no field decomposition. It is purely
     # electrostatic, so it is overplotted (dashed) only on the `phi` column.
     ke_mean, ke_std = reduce("kinetic_energy_transfer_theta")
@@ -395,15 +419,18 @@ def plot_transfer_by_theta(
         U_mean, U_std = reduce_sum(h_name, s_name)
         H_mean, H_std = reduce(h_name)
         S_mean, S_std = reduce(s_name)
+        U_mean, U_std = _scale(U_mean), _scale(U_std)
+        H_mean, H_std = _scale(H_mean), _scale(H_std)
+        S_mean, S_std = _scale(S_mean), _scale(S_std)
         col: list[tuple] = []
         if U_mean is not None:
-            col.append((_drive_label_short("U"), _drive_label("U", field),
+            col.append((_drive_label_short("U", div_by_bmag2), _drive_label("U", field),
                         transfer_sign * U_mean, "-", U_std))
         if H_mean is not None:
-            col.append((_drive_label_short("H"), _drive_label("H", field),
+            col.append((_drive_label_short("H", div_by_bmag2), _drive_label("H", field),
                         transfer_sign * H_mean, "-", H_std))
         if S_mean is not None:
-            col.append((_drive_label_short("S"), _drive_label("S", field),
+            col.append((_drive_label_short("S", div_by_bmag2), _drive_label("S", field),
                         transfer_sign * S_mean, "-", S_std))
         if col:
             columns.append((field, sym, col))
