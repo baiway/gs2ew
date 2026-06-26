@@ -3,7 +3,6 @@
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
 from pathlib import Path
 
 from gs2ew.utils.gs2_output import detect_saturation_time
@@ -379,7 +378,16 @@ def plot_fields_by_mode(
     output_dir: str | Path = "outputs",
     filename: str | None = None,
 ) -> Path:
-    """Plot kx-ky spectra of each available field at the last time step.
+    """Plot the kx and ky spectra of each available field at the last time step.
+
+    Each enabled field (phi, apar, bpar) gets one column of two panels: the top
+    shows the spectrum against ``kx`` (summed over ``ky``) and the bottom against
+    ``ky`` (summed over ``kx``), both on a log y-scale. An electrostatic run
+    (phi only) therefore gives a single 2x1 column; enabling ``apar`` and/or
+    ``bpar`` adds further columns.
+
+    The 1D spectra are taken from GS2's ``<field>2_by_kx`` and
+    ``<field>2_by_ky`` outputs.
 
     Parameters
     ----------
@@ -395,9 +403,21 @@ def plot_fields_by_mode(
     Path
         Path to the saved figure file
     """
-    # Determine enabled fields
-    all_fields = ["phi2_by_mode", "apar2_by_mode", "bpar2_by_mode"]
-    fields = [f for f in all_fields if f in ds]
+    # (field prefix, label); kept only if both 1D spectra are present.
+    candidates = [
+        ("phi", r"$|\phi|^2$"),
+        ("apar", r"$|A_\parallel|^2$"),
+        ("bpar", r"$|B_\parallel|^2$"),
+    ]
+    fields = [
+        (f, lab) for f, lab in candidates
+        if f"{f}2_by_kx" in ds and f"{f}2_by_ky" in ds
+    ]
+    if not fields:
+        raise ValueError(
+            "No field spectra found: expected '<field>2_by_kx' and "
+            "'<field>2_by_ky' for at least one of phi/apar/bpar."
+        )
 
     # Create output directory if it doesn't exist
     output_dir = Path(output_dir)
@@ -407,34 +427,34 @@ def plot_fields_by_mode(
     if filename is None:
         filename = "fields_by_mode.png"
 
-    # Extract kx and ky, shifting kx from FFT layout to monotonic
-    kx = np.fft.fftshift(ds["kx"].values)
+    # kx is stored in FFT layout; sort to a monotonic axis for a clean line
+    # plot. ky is already monotonic and non-negative.
+    kx = ds["kx"].values
+    kx_order = np.argsort(kx)
+    kx_sorted = kx[kx_order]
     ky = ds["ky"].values
 
-    # Create figure with 1 row, 3 columns
-    fig, axes = plt.subplots(1, 3, figsize=(14, 4))
+    n_cols = len(fields)
+    fig, axes = plt.subplots(
+        2, n_cols, figsize=(4.5 * n_cols, 7.0), squeeze=False
+    )
 
-    # Labels for each field
-    labels = {
-        "phi2_by_mode": r"$|\phi|^2$",
-        "apar2_by_mode": r"$|A_\parallel|^2$",
-        "bpar2_by_mode": r"$|B_\parallel|^2$",
-    }
+    for col, (field, lab) in enumerate(fields):
+        kx_spec = ds[f"{field}2_by_kx"].isel(t=-1).values[kx_order]
+        ky_spec = ds[f"{field}2_by_ky"].isel(t=-1).values
 
-    for ax, field in zip(axes, all_fields):
-        if field in fields:
-            # Extract last time step and shift kx from FFT layout
-            data = ds[field].isel(t=-1).values  # shape: (ky, kx)
-            data_shifted = np.fft.fftshift(data, axes=1)
+        ax_kx, ax_ky = axes[0, col], axes[1, col]
+        ax_kx.semilogy(kx_sorted, kx_spec, marker=".", ms=4, lw=1.3)
+        ax_ky.semilogy(ky, ky_spec, marker=".", ms=4, lw=1.3)
 
-            # Plot using pcolormesh with log scale
-            pcm = ax.pcolormesh(kx, ky, data_shifted, norm=LogNorm())
-            fig.colorbar(pcm, ax=ax)
-            ax.set_xlabel(r"$k_x \rho_\text{ref}$")
-            ax.set_ylabel(r"$k_y \rho_\text{ref}$")
-            ax.set_title(labels[field])
-        else:
-            ax.set_visible(False) # field not enabled - hide subplot
+        ax_kx.set_title(lab)
+        ax_kx.set_xlabel(r"$k_x \rho_\text{ref}$")
+        ax_ky.set_xlabel(r"$k_y \rho_\text{ref}$")
+        for ax in (ax_kx, ax_ky):
+            ax.grid(alpha=0.3, which="both")
+
+    axes[0, 0].set_ylabel("spectral power")
+    axes[1, 0].set_ylabel("spectral power")
 
     plt.tight_layout()
 
