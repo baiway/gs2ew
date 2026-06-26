@@ -7,7 +7,7 @@ is skipped, as it has already been analysed), and for each one produces:
 2. fields by mode                — ``plot_fields_by_mode``
 3. theta-resolved transfer       — ``plot_transfer_by_theta`` averaged from the
                                     detected saturation time to the end of the
-                                    run
+                                    run, with the drives divided by bmag**2
 4. theta-resolved transfer movie — `plot_transfer_by_theta_movie`
 
 Outputs are written under `<output_root>/<case>`, mirroring each run's path
@@ -105,9 +105,9 @@ def analyse(nc_file: Path, output_dir: Path) -> None:
         plot_fields_by_mode(ds, output_dir=output_dir)
         plot_transfer_by_theta(
             ds, tstart="saturation", show_std=True, normalise=True,
-            output_dir=output_dir,
+            div_by_bmag2=False, output_dir=output_dir,
         )
-        plot_transfer_by_theta_movie(ds, normalise="movie", output_dir=output_dir)
+        # plot_transfer_by_theta_movie(ds, normalise="movie", output_dir=output_dir)
 
 
 def main(argv: list[str]) -> int:
