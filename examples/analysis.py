@@ -22,10 +22,6 @@ from gs2ew.postprocess.fields import (
 from gs2ew.postprocess.transfer import (
     plot_transfer_by_theta,
     plot_transfer_by_theta_movie,
-    plot_vel_transfer_by_theta_by_sign,
-    plot_vel_transfer_by_theta_by_sign_movie,
-    plot_vel_transfer_theta_lambda,
-    plot_vel_transfer_theta_lambda_movie,
 )
 
 # ── Args ──────────────────────────────────────────────────────────────────────
@@ -72,13 +68,3 @@ with ds:
     plot_transfer_by_theta_movie(
         ds, tstart=60.0, normalise="movie", fps=15, output_dir=args.output_dir
     )
-
-    # ── Velocity-resolved transfer (needs write_*_transfer_velocity output) ──────
-
-    # Velocity-resolved transfer vs theta, split by sign of v_parallel
-    # plot_vel_transfer_by_theta_by_sign(ds, output_dir=args.output_dir)
-    # plot_vel_transfer_by_theta_by_sign_movie(ds, window=100.0, output_dir=args.output_dir, fps=15)
-
-    # Velocity-resolved transfer as 2D (theta, lambda) heatmaps, one row per drive
-    # plot_vel_transfer_theta_lambda(ds, output_dir=args.output_dir)
-    # plot_vel_transfer_theta_lambda_movie(ds, window=100.0, output_dir=args.output_dir, fps=15)
