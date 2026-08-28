@@ -62,6 +62,18 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
         help="multiply the kinetic-energy transfer by bmag**POWER",
     )
     parser.add_argument(
+        "--quantities",
+        nargs="*",
+        default=None,
+        choices=list(catalog.QUANTITIES),
+        help="restrict to these transferred quantities (default: all present)",
+    )
+    parser.add_argument(
+        "--no-kinetic",
+        action="store_true",
+        help="omit the kinetic-energy transfer",
+    )
+    parser.add_argument(
         "--klim", type=float, default=None, help="clip wavevector axes to +/-KLIM"
     )
     parser.add_argument(
@@ -136,18 +148,24 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
         bmag_power=args.bmag_power,
         kinetic_bmag_power=args.kinetic_bmag_power,
     )
+    # The trapped/passing diagnostics have no kinetic-energy counterpart, so
+    # they take the quantity selection but not the kinetic options.
+    select = dict(quantities=args.quantities, include_kinetic=not args.no_kinetic)
+    tp_select = dict(quantities=args.quantities)
 
     fields.plot_fields_time_traces(ds, output_dir=output_dir)
     fields.plot_fields_by_mode(ds, output_dir=output_dir)
     fields.plot_phi2_by_theta(ds, output_dir=output_dir)
 
     transfer_theta.plot_transfer_theta(
-        ds, output_dir=output_dir, show_std=True, **window_opts, **scale_opts
+        ds, output_dir=output_dir, show_std=True, **window_opts, **scale_opts, **select
     )
     transfer_summary.plot_transfer_summary(
-        ds, output_dir=output_dir, **window_opts, **scale_opts
+        ds, output_dir=output_dir, **window_opts, **scale_opts, **select
     )
-    transfer_time.plot_transfer_hovmoller(ds, output_dir=output_dir, **scale_opts)
+    transfer_time.plot_transfer_hovmoller(
+        ds, output_dir=output_dir, **scale_opts, **select
+    )
 
     for reduction in ("kxtarget", "kysource"):
         transfer_spectral.plot_transfer_spectral(
@@ -158,6 +176,7 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
             ke_variant=args.ke_variant,
             **window_opts,
             **scale_opts,
+            **select,
         )
         transfer_spectral.plot_transfer_spectrum(
             ds,
@@ -167,6 +186,7 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
             ke_variant=args.ke_variant,
             **window_opts,
             **scale_opts,
+            **select,
         )
         transfer_time.plot_transfer_butterfly(
             ds,
@@ -175,15 +195,19 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
             klim=args.klim,
             ke_variant=args.ke_variant,
             **scale_opts,
+            **select,
         )
 
     # Trapped/passing output is optional in GS2, so only plot it if it is there.
-    if catalog.available_drives(ds, "trapped_passing", include_kinetic=False):
+    if catalog.available_drives(
+        ds, "trapped_passing", args.quantities, include_kinetic=False
+    ):
         transfer_tp.plot_transfer_trapped_passing(
             ds,
             output_dir=output_dir,
             show_std=True,
             **window_opts,
+            **tp_select,
             bmag_power=args.bmag_power,
         )
         transfer_tp.plot_transfer_trapped_passing_spectral(
@@ -197,14 +221,16 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
     if args.movies:
         movie_opts = dict(fps=args.fps, stride=args.stride, output_dir=output_dir)
         transfer_theta.plot_transfer_theta_movie(
-            ds, normalise="movie", **movie_opts, **scale_opts
+            ds, normalise="movie", **movie_opts, **scale_opts, **select
         )
         transfer_spectral.plot_transfer_spectral_movie(
-            ds, klim=args.klim, **movie_opts, **scale_opts
+            ds, klim=args.klim, **movie_opts, **scale_opts, **select
         )
-        if catalog.available_drives(ds, "trapped_passing", include_kinetic=False):
+        if catalog.available_drives(
+            ds, "trapped_passing", args.quantities, include_kinetic=False
+        ):
             transfer_tp.plot_transfer_trapped_passing_movie(
-                ds, **movie_opts, bmag_power=args.bmag_power
+                ds, **movie_opts, **tp_select, bmag_power=args.bmag_power
             )
             transfer_tp.plot_transfer_trapped_passing_spectral_movie(
                 ds, klim=args.klim, **movie_opts, bmag_power=args.bmag_power
