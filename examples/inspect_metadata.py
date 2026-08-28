@@ -1,7 +1,7 @@
 """Inspect the GS2 build metadata stored in a .out.nc file."""
 
 import xarray as xr
-from gs2ew.utils.gs2_metadata import get_metadata, get_version, requires_version
+from gs2ew.metadata import get_metadata, get_version, requires_version
 
 NC_FILE = "results.out.nc"
 
@@ -27,7 +27,7 @@ with xr.open_dataset(NC_FILE) as ds:
     print("=== Version comparisons ===")
 
     for example in ["8.1.0", "8.2.0", "8.2.1", "8.2.1-500-gabcdef123", "9.0.0"]:
-        from gs2ew.utils.gs2_metadata import _parse_version_string
+        from gs2ew.metadata import _parse_version_string
         parsed = _parse_version_string(example)
         print(f"  file version > {example}? {version > parsed}")
 

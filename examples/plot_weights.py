@@ -9,8 +9,8 @@ or via run_dump_grids() below.
 """
 
 import xarray as xr
-from gs2ew.postprocess.weights import plot_weights
-from gs2ew.utils.weights import run_dump_grids
+from gs2ew import plot_weights
+from gs2ew.weights import run_dump_grids
 
 NC_FILE    = "results.out.nc"
 GRIDS_FILE = "results.grids.nc"
