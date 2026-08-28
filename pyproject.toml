@@ -17,5 +17,9 @@ dependencies = [
     "xarray>=2025.6.1",
 ]
 
+[project.scripts]
+gs2ew = "gs2ew.cli:main"
+
+
 [tool.setuptools.packages.find]
 where = ["src"]
