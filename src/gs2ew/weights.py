@@ -81,7 +81,7 @@ def get_weights(
         "function:\n\n"
         f"    plot_weights(ds, grids_nc='{run_stem}.grids.nc')\n\n"
         "If you need to run dump_grids from Python, use "
-        "gs2ew.utils.weights.run_dump_grids()."
+        "gs2ew.weights.run_dump_grids()."
     )
 
 
