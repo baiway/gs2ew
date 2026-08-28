@@ -67,6 +67,14 @@ with xr.open_dataset("run.out.nc") as ds:
 [`examples/analysis.py`](examples/analysis.py) is a template deck covering every
 plot; copy it and comment out what you don't want.
 
+[`examples/bmag_scan.py`](examples/bmag_scan.py) is a standalone, executable
+script with an editable configuration block at the top. It renders one plot set
+per `bmag` power plus a shape-comparison overlay:
+
+```bash
+uv run examples/bmag_scan.py run.out.nc outputs/scan --bmag-powers -1 0 1
+```
+
 ## Transfer diagnostics
 
 GS2's `diagnostics_free_energy_transfer` module writes the nonlinear drive of
