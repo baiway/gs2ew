@@ -1,12 +1,14 @@
 """Command-line interface.
 
-Five subcommands::
+Seven subcommands::
 
     gs2ew info  RUN                        # what is in the file
     gs2ew plot  RUN                        # the standard plot set, in RUN/gs2ew/
     gs2ew batch project/                   # every .out.nc under a directory
     gs2ew replot    RUN/gs2ew/*.nc         # redraw figures from their bundles
     gs2ew reproduce RUN/gs2ew/*.nc         # repeat the analysis from raw output
+    gs2ew compare scan/ --vary ntheta      # runs that differ in one parameter
+    gs2ew scan write|submit|restart|status # write and run a parameter scan
 
 RUN is a run directory holding one ``.out.nc``, or the ``.out.nc`` itself.
 `plot` and `batch` take the same options, so a batch job produces exactly what
@@ -18,8 +20,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import sys
 from collections.abc import Callable
+from contextlib import ExitStack
 from functools import partial
 from pathlib import Path
 
@@ -31,7 +36,7 @@ matplotlib.use("Agg")
 
 import xarray as xr
 
-from gs2ew import bundle, catalog, provenance, style
+from gs2ew import bundle, catalog, provenance, scan, style
 from gs2ew.io import OUTPUT_SUFFIX, RunFiles, find_run, load_gs2_output
 from gs2ew.metadata import get_metadata
 from gs2ew.provenance import CodeVersion
@@ -83,19 +88,7 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
         help="refuse to plot unless gs2ew and GS2 were both built from clean, "
         "committed code",
     )
-    parser.add_argument(
-        "--tstart",
-        default="saturation",
-        help="window start: a time, or 'saturation' (default), or 'none' for "
-        "the last timestep only",
-    )
-    parser.add_argument("--window", type=float, default=None, help="averaging window")
-    parser.add_argument(
-        "--saturation-pad",
-        type=float,
-        default=0.20,
-        help="fraction of the post-saturation interval to skip (default 0.20)",
-    )
+    _add_window_options(parser)
     parser.add_argument(
         "--quantities",
         nargs="*",
@@ -111,6 +104,35 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--klim", type=float, default=None, help="clip wavevector axes to +/-KLIM"
     )
+    _add_figure_options(parser)
+    parser.add_argument(
+        "--movies", action="store_true", help="also render the movies (slow)"
+    )
+    parser.add_argument("--fps", type=int, default=10, help="movie frame rate")
+    parser.add_argument(
+        "--stride", type=int, default=1, help="keep every nth movie frame"
+    )
+
+
+def _add_window_options(parser: argparse.ArgumentParser) -> None:
+    """How the averaging window is chosen."""
+    parser.add_argument(
+        "--tstart",
+        default="saturation",
+        help="window start: a time, or 'saturation' (default), or 'none' for "
+        "the last timestep only",
+    )
+    parser.add_argument("--window", type=float, default=None, help="averaging window")
+    parser.add_argument(
+        "--saturation-pad",
+        type=float,
+        default=0.20,
+        help="fraction of the post-saturation interval to skip (default 0.20)",
+    )
+
+
+def _add_figure_options(parser: argparse.ArgumentParser) -> None:
+    """How figures are drawn and saved."""
     parser.add_argument(
         "--style",
         default=None,
@@ -141,13 +163,6 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
         "--no-title",
         action="store_true",
         help="leave the averaging window out of figure titles, for a caption to give",
-    )
-    parser.add_argument(
-        "--movies", action="store_true", help="also render the movies (slow)"
-    )
-    parser.add_argument("--fps", type=int, default=10, help="movie frame rate")
-    parser.add_argument(
-        "--stride", type=int, default=1, help="keep every nth movie frame"
     )
 
 
@@ -533,6 +548,148 @@ def cmd_reproduce(args: argparse.Namespace) -> int:
     return status
 
 
+def cmd_compare(args: argparse.Namespace) -> int:
+    """Compare runs that differ in one input parameter."""
+    from gs2ew.plots import compare
+
+    if _gs2ew_unclean(args):
+        return 1
+    try:
+        runs = compare.find_runs(args.runs)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(f"gs2ew: {exc}") from None
+    if args.output_dir is not None:
+        output_dir = Path(args.output_dir)
+    elif len(args.runs) == 1 and Path(args.runs[0]).is_dir():
+        output_dir = Path(args.runs[0]) / DEFAULT_OUTPUT_DIR
+    else:
+        output_dir = Path(os.path.commonpath([r.run_dir for r in runs])) / DEFAULT_OUTPUT_DIR
+
+    with ExitStack() as stack:
+        datasets = [stack.enter_context(load_gs2_output(r.out_nc)) for r in runs]
+        try:
+            chosen = compare.comparable(datasets, args.vary, args.ignore)
+            datasets_chosen = compare.in_order([datasets[i] for i in chosen], args.vary)
+        except ValueError as exc:
+            raise SystemExit(f"gs2ew: {exc}") from None
+        if args.require_clean:
+            for i in chosen:
+                reason = _unclean(provenance.gs2_version(datasets[i]))
+                if reason is not None:
+                    print(f"{runs[i].out_nc}: {reason}")
+                    return 1
+
+        names = compare.run_labels(datasets_chosen)
+        print(f"Comparing {len(names)} runs by {args.vary}: {', '.join(names)}")
+        labels = compare.run_labels(datasets)
+        left = [labels[i] for i in range(len(runs)) if i not in chosen]
+        if left:
+            print(f"Leaving out, as they differ in more than {args.vary}: {', '.join(left)}")
+
+        options = dict(
+            tstart=_tstart(args.tstart),
+            window=args.window,
+            saturation_pad=args.saturation_pad,
+            quantities=args.quantities,
+            include_kinetic=not args.no_kinetic,
+            output_dir=output_dir,
+            save_data=not args.no_data,
+        )
+        window = {k: options.pop(k) for k in ("tstart", "window", "saturation_pad")}
+        selection = {k: options.pop(k) for k in ("quantities", "include_kinetic")}
+        plots = [
+            ("traces", compare.plot_compare_traces, {}),
+            ("spectra", compare.plot_compare_spectra, {}),
+            ("scalars", compare.plot_compare_scalars, selection),
+            ("theta", compare.plot_compare_theta, selection),
+        ]
+        with style.figure_options(**_figure_options(args)):
+            for name, plot, extra in plots:
+                try:
+                    plot(datasets_chosen, args.vary, **window, **extra, **options)
+                except ValueError as exc:  # nothing of this kind in the runs
+                    print(f"No {name} comparison: {exc}")
+    return 0
+
+
+def _scalar(text: str) -> object:
+    """An input-file value from the command line: an integer, a real, a
+    logical (true/false, .true./.false.) or else a string."""
+    for parse in (int, float):
+        try:
+            return parse(text)
+        except ValueError:
+            pass
+    logical = text.lower().strip(".")
+    if logical in {"true", "false"}:
+        return logical == "true"
+    return text
+
+
+def _vary(text: str) -> tuple[str, list[object]]:
+    """Parse ``KEY=V1,V2,...`` for `scan write --vary`."""
+    key, sep, values = text.partition("=")
+    if not sep or not key or not values:
+        raise argparse.ArgumentTypeError(f"expected KEY=V1,V2,..., got {text!r}")
+    return key, [_scalar(v) for v in values.split(",")]
+
+
+#: How `scan write` combines its --vary parameters.
+SCAN_MODES = {
+    "one-at-a-time": scan.one_at_a_time,
+    "product": scan.product,
+    "zip": scan.zipped,
+}
+
+
+def cmd_scan_write(args: argparse.Namespace) -> int:
+    """Write a run directory for each point of a scan."""
+    points = SCAN_MODES[args.mode](dict(args.vary))
+    machine = None if args.machine == "none" else args.machine
+    try:
+        run_dirs = scan.write(
+            args.template, points, args.directory, machine=machine, ingen=args.ingen
+        )
+    except (FileExistsError, ValueError) as exc:
+        raise SystemExit(f"gs2ew: {exc}") from None
+    for run_dir in run_dirs:
+        print(run_dir)
+    print(f"Wrote {len(run_dirs)} run(s); submit with: gs2ew scan submit {args.directory}")
+    return 0
+
+
+def cmd_scan_submit(args: argparse.Namespace) -> int:
+    """Submit the runs of a scan that have not been yet, or restart them."""
+    sbatch_args = args.sbatch_args
+    if sbatch_args and sbatch_args[0] == "--":
+        sbatch_args = sbatch_args[1:]
+    options = dict(dry_run=args.dry_run, check_cores=not args.no_core_check)
+    try:
+        if args.scan_command == "restart":
+            outcomes = scan.restart(args.directory, args.runs, sbatch_args, **options)
+        else:
+            outcomes = scan.submit(args.directory, sbatch_args, **options)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(f"gs2ew: {exc}") from None
+    width = max((len(name) for name, _ in outcomes), default=0)
+    for name, outcome in outcomes:
+        print(f"{name:<{width}}  {outcome}")
+    failed = ("sbatch failed", "cannot restart")
+    return 1 if any(o.startswith(failed) for _, o in outcomes) else 0
+
+
+def cmd_scan_status(args: argparse.Namespace) -> int:
+    """Report where each run of a scan has got to."""
+    try:
+        states = scan.status(args.directory)
+    except FileNotFoundError as exc:
+        raise SystemExit(f"gs2ew: {exc}") from None
+    width = max((len(name) for name, _ in states), default=0)
+    for name, state in states:
+        print(f"{name:<{width}}  {state}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gs2ew", description="Post-processing for GS2 output."
@@ -592,6 +749,135 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"directory for the results (default: {bundle.REPRODUCED_DIR}/ beside each bundle)",
     )
     reproduce.set_defaults(func=cmd_reproduce)
+
+    compare_parser = sub.add_parser(
+        "compare", help="compare runs that differ in one input parameter"
+    )
+    compare_parser.add_argument(
+        "runs",
+        nargs="+",
+        help="run directories or .out.nc files, or a directory to search, such as a scan's",
+    )
+    compare_parser.add_argument(
+        "--vary",
+        required=True,
+        metavar="KEY",
+        help="the input parameter the runs differ in, e.g. ntheta; qualify it by "
+        "its namelist (species_parameters_2.tprim) if the bare name is ambiguous",
+    )
+    compare_parser.add_argument(
+        "--ignore",
+        nargs="+",
+        default=[],
+        metavar="KEY",
+        help="other input parameters the runs may differ in, e.g. tripri with tri",
+    )
+    compare_parser.add_argument(
+        "-o",
+        "--output-dir",
+        default=None,
+        help=f"directory for the figures (default: {DEFAULT_OUTPUT_DIR}/ in the "
+        "directory searched, or in the runs' common directory)",
+    )
+    compare_parser.add_argument(
+        "--quantities",
+        nargs="*",
+        default=None,
+        choices=list(catalog.QUANTITIES),
+        help="restrict to these transferred quantities (default: all present)",
+    )
+    compare_parser.add_argument(
+        "--no-kinetic", action="store_true", help="omit the kinetic-energy transfer"
+    )
+    compare_parser.add_argument(
+        "--no-data", action="store_true", help="save the figures only, without their data bundles"
+    )
+    compare_parser.add_argument(
+        "--require-clean",
+        action="store_true",
+        help="refuse unless gs2ew and GS2 were all built from clean, committed code",
+    )
+    _add_window_options(compare_parser)
+    _add_figure_options(compare_parser)
+    compare_parser.set_defaults(func=cmd_compare)
+
+    scan_parser = sub.add_parser("scan", help="write, submit and follow a parameter scan")
+    scan_sub = scan_parser.add_subparsers(dest="scan_command", required=True)
+
+    write = scan_sub.add_parser(
+        "write", help="write a run directory for each point of a scan"
+    )
+    write.add_argument("template", help="the GS2 input file each run starts from")
+    write.add_argument("directory", help="where to write the scan; must be new or empty")
+    write.add_argument(
+        "--vary",
+        action="append",
+        type=_vary,
+        required=True,
+        metavar="KEY=V1,V2,...",
+        help="a parameter and its values, e.g. --vary ntheta=32,48; qualify "
+        "KEY by its namelist (species_parameters_2.tprim) if the bare name is "
+        "ambiguous or not in the template. Repeat for more parameters",
+    )
+    write.add_argument(
+        "--mode",
+        choices=list(SCAN_MODES),
+        default="one-at-a-time",
+        help="the template plus each value on its own (default); every "
+        "combination of the values (product); or the i-th values together (zip)",
+    )
+    write.add_argument(
+        "--machine",
+        default="archer2",
+        help=f"the Slurm template to copy into each run: {', '.join(scan.machines())}, "
+        "a file of your own, or none (default: archer2)",
+    )
+    write.add_argument(
+        "--ingen",
+        default=os.environ.get("GS2_INGEN") or shutil.which("ingen"),
+        help="GS2's ingen, for each run's exact grid sizes when checking core "
+        "counts (default: $GS2_INGEN, or ingen on PATH)",
+    )
+    write.set_defaults(func=cmd_scan_write)
+
+    submit = scan_sub.add_parser(
+        "submit", help="sbatch every run without output or a job yet"
+    )
+    restart = scan_sub.add_parser(
+        "restart",
+        help="restart the runs GS2 stopped at avail_cpu_time, or those named",
+    )
+    restart.add_argument(
+        "--runs",
+        nargs="+",
+        default=None,
+        metavar="RUN",
+        help="restart these runs, whatever stopped them",
+    )
+    for subparser in (submit, restart):
+        subparser.add_argument("directory", help="the scan directory")
+        subparser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="print the sbatch commands without running them or changing anything",
+        )
+        subparser.add_argument(
+            "--no-core-check",
+            action="store_true",
+            help="use the core count asked for even if the transfer diagnostics "
+            "can't, rather than the largest below it they can",
+        )
+        subparser.add_argument(
+            "sbatch_args",
+            nargs="*",
+            metavar="-- SBATCH_ARGS",
+            help="options for sbatch, after --, e.g. -- --time=02:00:00 --nodes=2",
+        )
+        subparser.set_defaults(func=cmd_scan_submit)
+
+    status = scan_sub.add_parser("status", help="where each run of a scan has got to")
+    status.add_argument("directory", help="the scan directory")
+    status.set_defaults(func=cmd_scan_status)
 
     return parser
 

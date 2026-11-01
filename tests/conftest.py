@@ -86,6 +86,8 @@ def make_dataset(
     nk: int = 7,
     nspec: int = 2,
     seed: int = 0,
+    deck: str | None = None,
+    run_id: str = "00000000-0000-4000-8000-000000000000",
 ) -> xr.Dataset:
     """Build a synthetic dataset shaped like GS2's transfer output.
 
@@ -103,7 +105,7 @@ def make_dataset(
 
     With `metadata`, the dataset carries the provenance GS2 records: version
     attributes, a ``build_config`` with git state `gs2_state`, a run UUID,
-    and :data:`SYNTHETIC_DECK` as the embedded input deck.
+    and `deck` (default :data:`SYNTHETIC_DECK`) as the embedded input deck.
     """
     rng = np.random.default_rng(seed)
 
@@ -222,7 +224,7 @@ def make_dataset(
 
     attrs: dict[str, str] = {}
     if metadata:
-        deck = SYNTHETIC_DECK.splitlines()
+        deck = (SYNTHETIC_DECK if deck is None else deck).splitlines()
         data["input_file"] = (("nlines", "char200"), char_array(deck))
         data["used_input_file"] = (
             ("nused_lines", "char200"),
@@ -240,7 +242,7 @@ def make_dataset(
         data["run_command"] = ((), np.bytes_("gs2 synthetic.in"))
         attrs = {
             "software_version": "8.2.1-2129-g5f2ef277b",
-            "id": "00000000-0000-4000-8000-000000000000",
+            "id": run_id,
             "date_created": "2026-08-21T08:05:28.316Z+01:00",
         }
 

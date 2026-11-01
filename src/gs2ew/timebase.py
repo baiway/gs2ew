@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pathlib import Path
+
 import numpy as np
 import xarray as xr
 
@@ -106,16 +108,19 @@ def resolve_saturation_start(
     global _last_reported
 
     tsat = detect_saturation_time(ds)
+    # Named, for when several runs are analysed together.
+    source = ds.encoding.get("source")
+    run = f" in {Path(source).parent.name}/{Path(source).name}" if source else ""
     if np.isnan(tsat):
         message = (
-            "Warning: saturation time could not be detected; "
+            f"Warning: saturation time could not be detected{run}; "
             "starting from the beginning of the run."
         )
         result = float(t_values[0])
     else:
         result = float(tsat + saturation_pad * (float(t_values[-1]) - tsat))
         message = (
-            f"Detected saturation time tsat = {tsat:.2f}; starting from "
+            f"Detected saturation time tsat = {tsat:.2f}{run}; starting from "
             f"tstart = {result:.2f} (saturation_pad = {saturation_pad:g})."
         )
 

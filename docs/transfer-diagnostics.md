@@ -62,6 +62,11 @@ weights `w` and `wl` itself, so nothing further is needed on the analysis side.
 | `plot_transfer_hovmoller` | $(t, \theta)$ — the whole run in one figure |
 | `plot_transfer_butterfly` | $(t, k)$ — which scales get driven, and when |
 | `plot_transfer_summary` | net budget by field and by population |
+| `plot_compare_scalars` | net transfers (and $\langle|\delta\phi|^2\rangle$, $Q$) against a parameter, across runs |
+| `plot_compare_theta` | $N_\mathbf{k}^{Q,f}(\theta)$ with a line per run |
+
+`plot_compare_traces` and `plot_compare_spectra` compare the fields' time
+traces and spectra across runs too; see [parameter scans](scans.md).
 
 Each of `plot_transfer_theta`, `plot_transfer_spectral`,
 `plot_transfer_trapped_passing` and `plot_transfer_trapped_passing_spectral`
