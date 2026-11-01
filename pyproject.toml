@@ -28,7 +28,7 @@ test = ["pytest>=8.0"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-gs2ew = ["styles/*.mplstyle"]
+gs2ew = ["styles/*.mplstyle", "templates/*.slurm"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
