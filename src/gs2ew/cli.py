@@ -45,6 +45,7 @@ STANDARD_PLOTS = (
     "fields_by_mode",
     "phi2_by_theta",
     "transfer_theta",
+    "transfer_flux_surface",
     "transfer_summary",
     "transfer_hovmoller",
     "transfer_spectral",
@@ -207,7 +208,7 @@ def cmd_info(args: argparse.Namespace) -> int:
 def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> None:
     """Render the standard plot set, or the `--only` subset, for one dataset."""
     from gs2ew.plots import fields, transfer_spectral, transfer_summary
-    from gs2ew.plots import transfer_theta, transfer_time, transfer_tp
+    from gs2ew.plots import transfer_surface, transfer_theta, transfer_time, transfer_tp
 
     window_opts = dict(
         tstart=_tstart(args.tstart),
@@ -268,6 +269,22 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
                 partial(transfer_time.plot_transfer_butterfly, ds, **spectral),
             ),
         ]
+
+    # GS2 writes the surface's shape for most geometries, but not all.
+    if all(name in ds for name in transfer_surface.GEOMETRY):
+        plots.insert(
+            4,
+            (
+                "transfer_flux_surface",
+                partial(
+                    transfer_surface.plot_transfer_flux_surface,
+                    ds,
+                    **out,
+                    **window_opts,
+                    **select,
+                ),
+            ),
+        )
 
     # Trapped/passing output is optional in GS2, so only plot it if it is there.
     has_tp = bool(

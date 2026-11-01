@@ -22,6 +22,7 @@ from gs2ew import (
     plot_fields_time_traces,
     plot_phi2_by_theta,
     plot_transfer_butterfly,
+    plot_transfer_flux_surface,
     plot_transfer_hovmoller,
     plot_transfer_spectral,
     plot_transfer_spectral_movie,
@@ -56,6 +57,9 @@ with xr.open_dataset(args.nc_file) as ds:
     # Averaged from 20% into the saturated interval to the end of the run, with
     # +/-1 std bands showing the temporal spread over that window.
     plot_transfer_theta(ds, tstart="saturation", show_std=True, output_dir=out)
+
+    # The same profiles drawn on the flux surface, each normalised to its peak.
+    plot_transfer_flux_surface(ds, tstart="saturation", output_dir=out)
 
     # ── Transfer vs wavevector ────────────────────────────────────────────────
 

@@ -54,6 +54,7 @@ weights `w` and `wl` itself, so nothing further is needed on the analysis side.
 | Function | Shows |
 | --- | --- |
 | `plot_transfer_theta` | $N_\mathbf{k}^{Q,f}(\theta)$, one column per field |
+| `plot_transfer_flux_surface` | the same, drawn on the flux surface in the poloidal plane |
 | `plot_transfer_spectral` | $(\theta, k)$ heatmaps for one reduction |
 | `plot_transfer_spectrum` | $\int\mathrm{d}\theta\,J\,N_\mathbf{k}(k)$, 1D spectrum |
 | `plot_transfer_trapped_passing` | $\theta$ profiles, trapped vs passing, per species |
@@ -66,6 +67,11 @@ Each of `plot_transfer_theta`, `plot_transfer_spectral`,
 `plot_transfer_trapped_passing` and `plot_transfer_trapped_passing_spectral`
 has a `_movie` counterpart. The Hovmöller and butterfly plots are the static
 alternative: they show the same time evolution in a figure you can point at.
+
+`plot_transfer_flux_surface` draws the simulated surface from GS2's `rplot`
+and `zplot`. GS2 describes only that surface, so the nested surfaces and
+boundary around it are the same shape scaled to other radii, for orientation
+only, and the width of the coloured band is for visibility.
 
 ## Targeted GS2 version
 
