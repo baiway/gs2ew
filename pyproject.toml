@@ -17,5 +17,16 @@ dependencies = [
     "xarray>=2025.6.1",
 ]
 
+[project.scripts]
+gs2ew = "gs2ew.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: exercises a real GS2 output file (deselect with '-m \"not slow\"')"]

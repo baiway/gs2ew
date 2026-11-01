@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-from gs2ew.utils.weights import get_weights
+from gs2ew.weights import get_weights
 
 
 def plot_weights(
@@ -25,7 +25,7 @@ def plot_weights(
     written to `.out.nc`. In that case, generate them first with
     `dump_grids` and pass the resulting file via `grids_nc`:
 
-        from gs2ew.utils.weights import run_dump_grids
+        from gs2ew.weights import run_dump_grids
         grids_nc = run_dump_grids("~/scratch/gs2/bin/dump_grids", "sim.in")
         plot_weights(ds, grids_nc=grids_nc)
 

@@ -5,8 +5,10 @@ import xarray as xr
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from gs2ew.utils.gs2_output import detect_saturation_time
-from gs2ew.postprocess.transfer import _resolve_frame_indices, _stitch_frames_to_movie
+from gs2ew.io import detect_saturation_time
+from gs2ew.movie import render_movie
+from gs2ew.plots import _common as common
+from gs2ew.timebase import DEFAULT_SATURATION_PAD, frame_indices, resolve_window
 
 
 def plot_fields_time_traces(
@@ -75,14 +77,7 @@ def plot_fields_time_traces(
     ax.grid(alpha=0.3)
     plt.tight_layout()
 
-    # Save figure
-    output_path = output_dir / filename
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-    print(f"Saved {output_path}")
-
-    return output_path
+    return common.save_figure(fig, output_dir, filename)
 
 
 def _get_phi_complex(ds: xr.Dataset) -> xr.DataArray:
@@ -133,13 +128,13 @@ def _phi2_zonal_nonzonal(phi: xr.DataArray) -> tuple[xr.DataArray, xr.DataArray]
 
 def _global_phi2_ylim(
     ds: xr.Dataset,
-    frame_indices: np.ndarray,
+    indices: np.ndarray,
 ) -> tuple[float, float]:
     """Return a padded (0, ymax) spanning the zonal and non-zonal phi2 curves
     over the given frames, so a movie's y-axis stays fixed across frames."""
     zonal, non_zonal = _phi2_zonal_nonzonal(_get_phi_complex(ds))
-    z = zonal.isel(t=frame_indices).values
-    n = non_zonal.isel(t=frame_indices).values
+    z = zonal.isel(t=indices).values
+    n = non_zonal.isel(t=indices).values
     hi = float(max(np.nanmax(z), np.nanmax(n)))
     pad = 0.05 * hi if hi > 0 else 1.0
     return 0.0, hi + pad
@@ -148,32 +143,36 @@ def _global_phi2_ylim(
 def plot_phi2_by_theta(
     ds: xr.Dataset,
     window: float | None = None,
-    tstart: float | None = None,
+    tstart: float | str | None = None,
+    saturation_pad: float = DEFAULT_SATURATION_PAD,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
     ylim: tuple[float, float] | None = None,
     tight_bbox: bool = True,
-    _quiet: bool = False,
+    quiet: bool = False,
 ) -> Path:
     """Plot the poloidal structure of ``|phi|^2``, split into its zonal
     (``ky = 0``) and non-zonal (``ky > 0``) parts.
 
     ``|phi|^2`` is computed from the complex potential and summed over ``kx``.
-    If a time-resolved potential (``phi_t``) is available the last time step is
-    plotted by default, or a window average if `window` is given; with only the
-    single-snapshot ``phi`` the snapshot is plotted and `window`/`tstart` are
-    not permitted.
+    With a time-resolved potential (``phi_t``) the last timestep is plotted by
+    default, or a window average when `window` or `tstart` is given. With only
+    the single-snapshot ``phi``, that snapshot is plotted and averaging is
+    rejected.
 
     Parameters
     ----------
     ds : xarray.Dataset
         GS2 output dataset (loaded from `.out.nc` file).
     window : float, optional
-        Duration of the averaging window. If provided without `tstart`,
-        averages over the last `window` time units. Requires a time-resolved
-        potential.
-    tstart : float, optional
-        Start time for the averaging window. Requires `window` to be set.
+        Length of the averaging window. See :mod:`gs2ew.timebase` for how
+        `window` and `tstart` combine. Requires a time-resolved potential.
+    tstart : float or str, optional
+        Start of the averaging window, or ``"saturation"`` to start from the
+        detected saturation time padded by `saturation_pad`.
+    saturation_pad : float, optional
+        Fraction of the post-saturation interval to skip when
+        ``tstart="saturation"``. Default 0.20.
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is "outputs".
     filename : str, optional
@@ -186,6 +185,8 @@ def plot_phi2_by_theta(
         If True (default), save with ``bbox_inches="tight"``. Movie frames pass
         False so every frame has identical pixel dimensions (required by the
         ffmpeg encoder).
+    quiet : bool, optional
+        Suppress the "Saved ..." message. Default False.
 
     Returns
     -------
@@ -195,49 +196,35 @@ def plot_phi2_by_theta(
     Raises
     ------
     ValueError
-        If `tstart` is given without `window`, or `window` is requested but the
-        potential has no time dimension.
+        If averaging is requested but the potential has no time dimension.
     KeyError
         If no potential field is present in `ds`.
     """
-    if tstart is not None and window is None:
-        raise ValueError("`tstart` requires `window` to be specified.")
-
     zonal, non_zonal = _phi2_zonal_nonzonal(_get_phi_complex(ds))
     has_t = "t" in zonal.dims
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
 
     theta = ds["theta"].values
 
-    if window is not None:
-        if not has_t:
-            raise ValueError(
-                "Time averaging was requested but the potential has no time "
-                "dimension; a time-resolved 'phi_t' (write_phi_over_time) is "
-                "required."
-            )
-        if tstart is None:
-            tstart = float(ds["t"].values[-1]) - window
-        tend = tstart + window
-        zonal = zonal.sel(t=slice(tstart, tend)).mean("t")
-        non_zonal = non_zonal.sel(t=slice(tstart, tend)).mean("t")
-        title = f"Averaged over t = [{tstart:.1f}, {tend:.1f}]"
-        if filename is None:
-            filename = "phi2_by_theta_averaged.png"
-    else:
-        if has_t:
-            zonal = zonal.isel(t=-1)
-            non_zonal = non_zonal.isel(t=-1)
-        title = None
-        if filename is None:
-            filename = "phi2_by_theta.png"
+    if tw.averaging and not has_t:
+        raise ValueError(
+            "Time averaging was requested but the potential has no time "
+            "dimension; a time-resolved 'phi_t' (write_phi_over_time) is "
+            "required."
+        )
+
+    zonal = tw.mean(zonal) if has_t else zonal
+    non_zonal = tw.mean(non_zonal) if has_t else non_zonal
+    title = tw.title
+    if filename is None:
+        filename = common.default_filename("phi2_by_theta", tw.averaging)
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(theta, zonal.values, linewidth=1.5, label=r"zonal ($k_y = 0$)")
+    ax.plot(theta, zonal.values, linewidth=1.5, color=common.QUANTITY_COLOURS["U"],
+            label=r"zonal ($k_y = 0$)")
     ax.plot(theta, non_zonal.values, linewidth=1.5, linestyle="--",
-            label=r"non-zonal ($k_y > 0$)")
+            color=common.QUANTITY_COLOURS["H"], label=r"non-zonal ($k_y > 0$)")
 
     if title is not None:
         ax.set_title(title)
@@ -249,69 +236,47 @@ def plot_phi2_by_theta(
     ax.grid(alpha=0.3)
     plt.tight_layout()
 
-    output_path = output_dir / filename
-    plt.savefig(output_path, dpi=150, bbox_inches="tight" if tight_bbox else None)
-    plt.close(fig)
-
-    if not _quiet:
-        print(f"Saved {output_path}")
-    return output_path
+    return common.save_figure(
+        fig, output_dir, filename, tight_bbox=tight_bbox, quiet=quiet
+    )
 
 
 def plot_phi2_by_theta_movie(
     ds: xr.Dataset,
     window: float | None = None,
-    tstart: float | None = None,
+    tstart: float | str | None = None,
+    saturation_pad: float = DEFAULT_SATURATION_PAD,
     output_dir: str | Path = "outputs",
-    filename: str | None = None,
+    filename: str = "phi2_by_theta.mp4",
+    stride: int = 1,
     fps: int = 10,
     crf: int = 18,
     verbose: bool = False,
 ) -> Path:
-    """Create a movie of the poloidal structure of ``|phi|^2`` (zonal and
-    non-zonal parts) over time.
-
-    Frames are saved individually to a subdirectory of `output_dir`, then
-    stitched into a video. The y-axis is fixed across all frames so the curves
-    do not rescale frame to frame.
+    """Animate :func:`plot_phi2_by_theta` over time.
 
     Requires a time-resolved potential ``phi_t`` (GS2's ``write_phi_over_time``);
-    the single-snapshot ``phi`` has no time axis and cannot be animated.
+    the single-snapshot ``phi`` has no time axis to animate over. The y-axis is
+    fixed across all frames so the curves do not rescale frame to frame.
 
     Parameters
     ----------
-    ds : xarray.Dataset
-        GS2 output dataset containing ``phi_t``. Should be opened lazily
-        (``xr.open_dataset``) to keep memory bounded on large runs.
     window : float, optional
-        Averaging window duration. If provided, each frame shows the rolling
-        average over `window` time units. If omitted, frames are instantaneous.
-    tstart : float, optional
-        Start time for the movie; frames before this are skipped. Detected
-        automatically via ``detect_saturation_time`` if not provided.
-    output_dir : str or Path, optional
-        Directory where the movie and frame images are saved. Default "outputs".
-    filename : str, optional
-        Filename for the output movie. If None, uses "phi2_by_theta_movie.mp4".
-    fps : int, optional
-        Frames per second. Default is 10.
-    crf : int, optional
-        libx264 Constant Rate Factor (0 = lossless, 51 = worst). Default 18.
-    verbose : bool, optional
-        If True, prints frame count and per-frame progress. Default is False.
+        If given, each frame is a rolling average over `window` time units.
+    tstart : float or str, optional
+        First frame's time; None starts at the detected saturation time.
+    stride : int, optional
+        Keep every nth frame. Default 1.
 
     Returns
     -------
     Path
-        Path to the saved movie file.
+        Path to the saved movie.
 
     Raises
     ------
     ValueError
-        If the potential has no time dimension, or no valid frames exist for
-        the given `tstart` and `window`.
-    KeyError
-        If no potential field is present in `ds`.
+        If the potential has no time dimension, or no frames survive filtering.
     """
     if "t" not in _get_phi_complex(ds).dims:
         raise ValueError(
@@ -320,57 +285,26 @@ def plot_phi2_by_theta_movie(
             "dataset only has the single-snapshot 'phi'."
         )
 
-    frame_indices = _resolve_frame_indices(ds, tstart, window)
-
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    if filename is None:
-        filename = "phi2_by_theta_movie.mp4"
-
-    frames_dir = output_dir / (Path(filename).stem + "_frames")
-    frames_dir.mkdir(parents=True, exist_ok=True)
-
+    indices = frame_indices(ds, tstart, window, saturation_pad, stride)
+    ylim = _global_phi2_ylim(ds, indices)
     t_values = ds["t"].values
 
-    # Fix the y-axis across all frames and save at a constant canvas size
-    # (tight_bbox=False) as ffmpeg requires identical frame dimensions.
-    ylim = _global_phi2_ylim(ds, frame_indices)
+    def render(frame_path: Path, t_index: int) -> None:
+        frame_ds = ds if window is not None else ds.isel(t=slice(t_index, t_index + 1))
+        plot_phi2_by_theta(
+            frame_ds,
+            window=window,
+            tstart=float(t_values[t_index]) if window is not None else None,
+            output_dir=frame_path.parent,
+            filename=frame_path.name,
+            ylim=ylim,
+            tight_bbox=False,
+            quiet=True,
+        )
 
-    n_frames = len(frame_indices)
-    if verbose:
-        print(f"Generating {n_frames} frames...")
-
-    for frame_num, t_idx in enumerate(frame_indices):
-        frame_filename = f"frame_{frame_num:06d}.png"
-        if window is not None:
-            plot_phi2_by_theta(
-                ds,
-                window=window,
-                tstart=float(t_values[t_idx]),
-                output_dir=frames_dir,
-                filename=frame_filename,
-                ylim=ylim,
-                tight_bbox=False,
-                _quiet=True,
-            )
-        else:
-            plot_phi2_by_theta(
-                ds.isel(t=slice(t_idx, t_idx + 1)),
-                output_dir=frames_dir,
-                filename=frame_filename,
-                ylim=ylim,
-                tight_bbox=False,
-                _quiet=True,
-            )
-        if verbose:
-            print(f"  Frame {frame_num + 1}/{n_frames}")
-
-    output_path = output_dir / filename
-    _stitch_frames_to_movie(frames_dir, output_path, fps=fps, crf=crf)
-
-    print(f"Saved {output_path}")
-    return output_path
+    return render_movie(
+        render, indices, Path(output_dir) / filename, fps=fps, crf=crf, verbose=verbose
+    )
 
 
 def plot_fields_by_mode(
@@ -458,11 +392,4 @@ def plot_fields_by_mode(
 
     plt.tight_layout()
 
-    # Save figure
-    output_path = output_dir / filename
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-    print(f"Saved {output_path}")
-
-    return output_path
+    return common.save_figure(fig, output_dir, filename)

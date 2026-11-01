@@ -1,31 +1,34 @@
-"""
-Template analysis deck for gs2ew.
+"""Template analysis deck for gs2ew.
 
-Copy this file, then run with:
+Copy this file, comment in or out the plots you want, then run:
 
-    python analysis.py results.out.nc outputs/
+    uv run examples/analysis.py results.out.nc outputs/
 
-or, if using uv:
+For the standard plot set with no editing, use the CLI instead:
 
-    uv run analysis.py results.out.nc outputs/
+    uv run gs2ew plot results.out.nc -o outputs/ --movies
 """
 
 import argparse
 
 import xarray as xr
-from gs2ew.postprocess.fields import (
+
+from gs2ew import (
     plot_fields_by_mode,
     plot_fields_time_traces,
     plot_phi2_by_theta,
-    plot_phi2_by_theta_movie,
-)
-from gs2ew.postprocess.transfer import (
-    plot_transfer_by_theta,
-    plot_transfer_by_theta_movie,
-    plot_vel_transfer_by_theta_by_sign,
-    plot_vel_transfer_by_theta_by_sign_movie,
-    plot_vel_transfer_theta_lambda,
-    plot_vel_transfer_theta_lambda_movie,
+    plot_transfer_butterfly,
+    plot_transfer_hovmoller,
+    plot_transfer_spectral,
+    plot_transfer_spectral_movie,
+    plot_transfer_spectrum,
+    plot_transfer_summary,
+    plot_transfer_theta,
+    plot_transfer_theta_movie,
+    plot_transfer_trapped_passing,
+    plot_transfer_trapped_passing_movie,
+    plot_transfer_trapped_passing_spectral,
+    plot_transfer_trapped_passing_spectral_movie,
 )
 
 # ── Args ──────────────────────────────────────────────────────────────────────
@@ -35,50 +38,59 @@ parser.add_argument("nc_file", help="Path to the GS2 .out.nc file")
 parser.add_argument("output_dir", help="Directory where plots are saved")
 args = parser.parse_args()
 
-# ── Run ───────────────────────────────────────────────────────────────────────
+out = args.output_dir
 
-# Open with dask chunking along the time axis so that windowed averages over
-# large velocity-resolved variables are computed one timestep at a time rather
-# than loading the full window into memory.
-ds = xr.open_dataset(args.nc_file, chunks={"t": 1})
+with xr.open_dataset(args.nc_file) as ds:
+    # ── Fields ────────────────────────────────────────────────────────────────
 
-with ds:
-    # Field diagnostics
-    plot_fields_time_traces(ds, output_dir=args.output_dir)
-    plot_fields_by_mode(ds, output_dir=args.output_dir)
+    plot_fields_time_traces(ds, output_dir=out)
+    plot_fields_by_mode(ds, output_dir=out)
+    plot_phi2_by_theta(ds, output_dir=out)
 
-    # |phi|^2 vs theta, split into zonal (ky=0) and non-zonal (ky>0) parts
-    plot_phi2_by_theta(ds, output_dir=args.output_dir)
+    # ── Transfer vs theta ─────────────────────────────────────────────────────
 
-    # Movie of |phi|^2 vs theta (needs time-resolved phi_t / write_phi_over_time)
-    # plot_phi2_by_theta_movie(ds, output_dir=args.output_dir, fps=15)
+    # Averaged from 20% into the saturated interval to the end of the run, with
+    # +/-1 std bands showing the temporal spread over that window.
+    plot_transfer_theta(ds, tstart="saturation", show_std=True, output_dir=out)
 
-    # ── Theta-resolved transfer (kinetic energy + free energy H, entropy S, U) ──
+    # ── Transfer vs wavevector ────────────────────────────────────────────────
 
-    # Transfer at the last timestep
-    plot_transfer_by_theta(ds, output_dir=args.output_dir)
+    # (theta, k) heatmaps and the theta-integrated 1D spectrum. `reduction` picks
+    # which leg of the triad to resolve: kxtarget, kxsource or kysource.
+    plot_transfer_spectral(ds, reduction="kxtarget", tstart="saturation",
+                           klim=0.6, output_dir=out)
+    plot_transfer_spectrum(ds, reduction="kxtarget", tstart="saturation",
+                           klim=0.6, output_dir=out)
 
-    # Transfer averaged over a time window, with ±1 std bands showing the
-    # temporal spread over the window (adjust tstart and window to taste).
-    plot_transfer_by_theta(
-        ds, window=60.0, show_std=True, normalise=True, div_by_bmag2=True,
-        output_dir=args.output_dir,
-    )
+    # ── Time-resolved (static alternatives to a movie) ────────────────────────
 
-    # Movie of the transfer over time, starting at t = 60. normalise="movie"
-    # divides each curve by a single fixed factor (its peak over the whole
-    # timeseries), so small terms like U are scaled into view while the relative
-    # amplitudes between curves and their growth/decay over time are preserved.
-    plot_transfer_by_theta_movie(
-        ds, tstart=60.0, normalise="movie", fps=15, output_dir=args.output_dir
-    )
+    # The whole run in one figure: (t, theta) and (t, k) heatmaps.
+    plot_transfer_hovmoller(ds, output_dir=out)
+    plot_transfer_butterfly(ds, reduction="kxtarget", klim=0.6, output_dir=out)
 
-    # ── Velocity-resolved transfer (needs write_*_transfer_velocity output) ──────
+    # ── Trapped vs passing ────────────────────────────────────────────────────
 
-    # Velocity-resolved transfer vs theta, split by sign of v_parallel
-    # plot_vel_transfer_by_theta_by_sign(ds, output_dir=args.output_dir)
-    # plot_vel_transfer_by_theta_by_sign_movie(ds, window=100.0, output_dir=args.output_dir, fps=15)
+    # One panel per species, trapped and passing on the same axes.
+    plot_transfer_trapped_passing(ds, tstart="saturation", show_std=True,
+                                  output_dir=out)
+    plot_transfer_trapped_passing_spectral(ds, quantity="U", field="phi",
+                                           tstart="saturation", klim=0.6,
+                                           output_dir=out)
 
-    # Velocity-resolved transfer as 2D (theta, lambda) heatmaps, one row per drive
-    # plot_vel_transfer_theta_lambda(ds, output_dir=args.output_dir)
-    # plot_vel_transfer_theta_lambda_movie(ds, window=100.0, output_dir=args.output_dir, fps=15)
+    # ── Net budget ────────────────────────────────────────────────────────────
+
+    plot_transfer_summary(ds, output_dir=out)
+
+    # ── Movies ────────────────────────────────────────────────────────────────
+    #
+    # `stride` keeps every nth frame, which is worth using while you decide what
+    # you want to look at. `normalise="movie"` divides each curve by a single
+    # fixed factor (its peak over the whole movie), so small terms like U are
+    # scaled into view while relative amplitudes and growth over time survive.
+
+    # plot_transfer_trapped_passing_movie(ds, stride=2, fps=15, output_dir=out)
+    # plot_transfer_theta_movie(ds, normalise="movie", stride=2, fps=15, output_dir=out)
+    # plot_transfer_trapped_passing_spectral_movie(ds, klim=0.6, stride=2, fps=15,
+    #                                              output_dir=out)
+    # plot_transfer_spectral_movie(ds, klim=0.6, quantities=["U"], stride=2, fps=15,
+    #                              output_dir=out)
