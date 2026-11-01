@@ -2,7 +2,6 @@
 
 import numpy as np
 import xarray as xr
-import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from pathlib import Path
 
@@ -33,28 +32,35 @@ def compute_fields_time_traces(
     )
 
 
+#: Legend label for each field's squared amplitude.
+_TRACE_LABELS = {
+    "phi2": r"$|\phi|^2$",
+    "apar2": r"$|A_\parallel|^2$",
+    "bpar2": r"$|B_\parallel|^2$",
+}
+
+
 def render_fields_time_traces(reduced: xr.Dataset) -> Figure:
     """Draw the traces from :func:`compute_fields_time_traces`."""
     tsat = float(reduced.attrs["tsat"])
     t = reduced["t"].values
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, axes = common.subplots(1, 1, aspect=0.5)
+    ax = axes[0, 0]
 
     # Plot each field on log scale
     for field in reduced.data_vars:
-        ax.semilogy(t, reduced[field].values, linewidth=1.5, label=field)
+        ax.semilogy(t, reduced[field].values, label=_TRACE_LABELS.get(field, field))
 
-    # Highlight saturated region
+    # Shade the saturated region
     if not np.isnan(tsat):
-        ax.axvspan(tsat, t.max(), alpha=0.2, color="green")
-        ax.axvline(tsat, color="green", linestyle="--", linewidth=2,
-                   label=f"Saturation (t = {tsat:.2f})")
+        ax.axvspan(tsat, t.max(), color="0.5", alpha=0.15, linewidth=0)
+        ax.axvline(tsat, color="0.4", linestyle="--",
+                   label=f"saturation ($t = {tsat:.2f}$)")
 
-    ax.set_xlabel("t", fontsize=12)
-    ax.set_ylabel(r"field$^2$", fontsize=12)
+    ax.set_xlabel(r"$t$")
+    ax.set_ylabel(r"field$^2$")
     ax.legend()
-    ax.grid(alpha=0.3)
-    plt.tight_layout()
     return fig
 
 
@@ -77,7 +83,8 @@ def plot_fields_time_traces(
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is "outputs".
     filename : str, optional
-        Filename for the plot. If None, uses "field_time_traces.png".
+        Filename for the plot. If None, uses "field_time_traces", saved in
+        each of the formats set by :func:`gs2ew.style.figure_options`.
     window : float, optional
         Time interval for computing growth rate. Default is 20.0.
     threshold : float, optional
@@ -218,24 +225,20 @@ def render_phi2_by_theta(
     `ylim` fixes the y-axis; the movie helper uses it to keep the axis steady
     across frames.
     """
-    title = TimeWindow.from_attrs(reduced.attrs).title
     theta = reduced["theta"].values
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(theta, reduced["phi2_zonal"].values, linewidth=1.5,
-            color=common.QUANTITY_COLOURS["U"], label=r"zonal ($k_y = 0$)")
-    ax.plot(theta, reduced["phi2_nonzonal"].values, linewidth=1.5, linestyle="--",
-            color=common.QUANTITY_COLOURS["H"], label=r"non-zonal ($k_y > 0$)")
+    fig, axes = common.subplots(1, 1, aspect=0.55)
+    ax = axes[0, 0]
+    ax.plot(theta, reduced["phi2_zonal"].values, color="C0",
+            label=r"zonal ($k_y = 0$)")
+    ax.plot(theta, reduced["phi2_nonzonal"].values, color="C1", linestyle="--",
+            label=r"non-zonal ($k_y > 0$)")
 
-    if title is not None:
-        ax.set_title(title)
     if ylim is not None:
         ax.set_ylim(ylim)
-    ax.set_xlabel(r"$\theta$", fontsize=12)
-    ax.set_ylabel(r"$\sum_{k_x} |\phi|^2$", fontsize=12)
+    ax.set_xlabel(r"$\theta$")
+    ax.set_ylabel(r"$\sum_{k_x} |\phi|^2$")
     ax.legend()
-    ax.grid(alpha=0.3)
-    plt.tight_layout()
     return fig
 
 
@@ -247,7 +250,7 @@ def plot_phi2_by_theta(
     output_dir: str | Path = "outputs",
     filename: str | None = None,
     ylim: tuple[float, float] | None = None,
-    tight_bbox: bool = True,
+    tight_bbox: bool = False,
     save_data: bool = True,
     quiet: bool = False,
 ) -> Path:
@@ -276,15 +279,15 @@ def plot_phi2_by_theta(
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is "outputs".
     filename : str, optional
-        Filename for the plot. If None, uses "phi2_by_theta.png" (or
-        "phi2_by_theta_averaged.png" when averaging).
+        Filename for the plot. If None, uses "phi2_by_theta" (or
+        "phi2_by_theta_averaged" when averaging), saved in each of the
+        formats set by :func:`gs2ew.style.figure_options`.
     ylim : tuple of float, optional
         Fixed (ymin, ymax) for the y-axis. Used by the movie helper to keep the
         axis steady across frames; if None, matplotlib autoscales.
     tight_bbox : bool, optional
-        If True (default), save with ``bbox_inches="tight"``. Movie frames pass
-        False so every frame has identical pixel dimensions (required by the
-        ffmpeg encoder).
+        Crop the saved figure to its contents. Default False, so the figure
+        is the size it was drawn at.
     save_data : bool, optional
         Write the plotted data and its provenance alongside the figure; see
         :mod:`gs2ew.bundle`. Default True.
@@ -373,7 +376,6 @@ def plot_phi2_by_theta_movie(
             output_dir=frame_path.parent,
             filename=frame_path.name,
             ylim=ylim,
-            tight_bbox=False,
             save_data=False,
             quiet=True,
         )
@@ -437,29 +439,19 @@ def render_fields_by_mode(reduced: xr.Dataset) -> Figure:
     kx = reduced["kx"].values
     ky = reduced["ky"].values
 
-    n_cols = len(fields)
-    fig, axes = plt.subplots(
-        2, n_cols, figsize=(4.5 * n_cols, 7.0), squeeze=False
-    )
+    fig, axes = common.subplots(2, len(fields), aspect=0.75)
 
     for col, (field, lab) in enumerate(fields):
         ax_kx, ax_ky = axes[0, col], axes[1, col]
-        ax_kx.semilogy(kx, reduced[f"{field}2_by_kx"].values, marker=".", ms=4, lw=1.3)
-        ax_ky.semilogy(ky, reduced[f"{field}2_by_ky"].values, marker=".", ms=4, lw=1.3)
+        ax_kx.semilogy(kx, reduced[f"{field}2_by_kx"].values, marker=".")
+        ax_ky.semilogy(ky, reduced[f"{field}2_by_ky"].values, marker=".")
 
         ax_kx.set_title(lab)
-        ax_kx.set_xlabel(r"$k_x \rho_\text{ref}$")
-        ax_ky.set_xlabel(r"$k_y \rho_\text{ref}$")
-        for ax in (ax_kx, ax_ky):
-            ax.grid(alpha=0.3, which="both")
+        ax_kx.set_xlabel(r"$k_x \rho_\mathrm{ref}$")
+        ax_ky.set_xlabel(r"$k_y \rho_\mathrm{ref}$")
 
     axes[0, 0].set_ylabel("spectral power")
     axes[1, 0].set_ylabel("spectral power")
-
-    title = TimeWindow.from_attrs(reduced.attrs).title
-    if title is not None:
-        fig.suptitle(title)
-    plt.tight_layout()
     return fig
 
 
@@ -491,8 +483,9 @@ def plot_fields_by_mode(
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is "outputs".
     filename : str, optional
-        Filename for the plot. If None, uses "fields_by_mode.png" (or
-        "fields_by_mode_averaged.png" when averaging).
+        Filename for the plot. If None, uses "fields_by_mode" (or
+        "fields_by_mode_averaged" when averaging), saved in each of the
+        formats set by :func:`gs2ew.style.figure_options`.
     window, tstart, saturation_pad : optional
         The time window, as for every other plot; see :mod:`gs2ew.timebase`.
         By default the last timestep is plotted.
@@ -523,7 +516,7 @@ register(
         "fields_time_traces",
         compute_fields_time_traces,
         render_fields_time_traces,
-        lambda reduced: "field_time_traces.png",
+        lambda reduced: "field_time_traces",
     )
 )
 register(

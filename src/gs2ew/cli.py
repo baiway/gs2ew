@@ -31,7 +31,7 @@ matplotlib.use("Agg")
 
 import xarray as xr
 
-from gs2ew import bundle, catalog, provenance
+from gs2ew import bundle, catalog, provenance, style
 from gs2ew.io import OUTPUT_SUFFIX, RunFiles, find_run, load_gs2_output
 from gs2ew.metadata import get_metadata
 from gs2ew.provenance import CodeVersion
@@ -109,6 +109,37 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--klim", type=float, default=None, help="clip wavevector axes to +/-KLIM"
+    )
+    parser.add_argument(
+        "--style",
+        default=None,
+        help="a style to apply on top of gs2ew's print style: a .mplstyle file "
+        "or a matplotlib style name",
+    )
+    parser.add_argument(
+        "--width",
+        type=float,
+        default=None,
+        help="figure width in inches (default: the style's, 6.0 for print)",
+    )
+    parser.add_argument(
+        "--format",
+        dest="formats",
+        nargs="+",
+        default=None,
+        metavar="FORMAT",
+        help=f"file types to save (default: {' '.join(style.DEFAULT_FORMATS)})",
+    )
+    parser.add_argument(
+        "--dpi",
+        type=int,
+        default=None,
+        help=f"resolution of PNGs and of heatmaps in PDFs (default: {style.DEFAULT_DPI})",
+    )
+    parser.add_argument(
+        "--no-title",
+        action="store_true",
+        help="leave the averaging window out of figure titles, for a caption to give",
     )
     parser.add_argument(
         "--movies", action="store_true", help="also render the movies (slow)"
@@ -355,8 +386,25 @@ def _plot_run(run: RunFiles, args: argparse.Namespace, output_dir: Path) -> int:
             if reason is not None:
                 print(f"{run.out_nc}: {reason}")
                 return 1
-        _plot_all(ds, args, output_dir)
+        with style.figure_options(**_figure_options(args)):
+            _plot_all(ds, args, output_dir)
     return 0
+
+
+def _figure_options(args: argparse.Namespace) -> dict[str, object]:
+    """The figure options given on the command line."""
+    if args.style is not None:
+        try:
+            style.resolve(args.style)
+        except ValueError as exc:
+            raise SystemExit(f"gs2ew: {exc}") from None
+    return dict(
+        style=args.style,
+        width=args.width,
+        formats=args.formats,
+        dpi=args.dpi,
+        title=False if args.no_title else None,
+    )
 
 
 def _gs2ew_unclean(args: argparse.Namespace) -> bool:
@@ -505,8 +553,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         type=_render_override,
         metavar="KEY=VALUE",
-        help="change a render option, e.g. --set normalise=true; VALUE is read as "
-        "JSON if it can be. A bundle recording the change is written with the figure",
+        help="change a render option, e.g. --set normalise=true, or a figure "
+        "option (style, width, title, formats, dpi), e.g. --set formats=pdf; "
+        "VALUE is read as JSON if it can be. A bundle recording the change is "
+        "written with the figure",
     )
     replot.set_defaults(func=cmd_replot)
 

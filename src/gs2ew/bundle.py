@@ -5,7 +5,8 @@ the few arrays the figure draws (a time average, a theta integral, ...) and
 ``render`` draws them. :func:`make_plot` runs both, and writes the reduced
 data next to the figure as a self-describing netCDF *bundle*::
 
-    transfer_theta_averaged.png   the figure
+    transfer_theta_averaged.pdf   the figure, for print
+    transfer_theta_averaged.png   the same figure, for viewing
     transfer_theta_averaged.nc    its data, recipe and provenance
 
 The figure is always rendered from the bundle's contents, never from the raw
@@ -14,8 +15,9 @@ records:
 
 * the reduced arrays, with GS2's ``units`` and ``long_name`` and CF
   ``cell_methods`` describing any reduction over time;
-* the *recipe* — the plot's name and every option given to ``compute`` and
-  ``render`` — as JSON in the ``gs2ew_recipe`` attribute;
+* the *recipe* — the plot's name, every option given to ``compute`` and
+  ``render``, and the figure's style and formats (see :mod:`gs2ew.style`) —
+  as JSON in the ``gs2ew_recipe`` attribute;
 * the GS2 and gs2ew versions, commits, branches and dirty states, and the
   versions of Python and the numerical libraries;
 * the GS2 output's path, size and UUID, and the input deck it was run with.
@@ -36,18 +38,21 @@ import json
 import shlex
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import xarray as xr
+from matplotlib.backend_bases import FigureCanvasBase
 from matplotlib.figure import Figure
 
-from gs2ew import provenance
+from gs2ew import provenance, style
 from gs2ew.io import OUTPUT_SUFFIX, find_run, load_gs2_output
 from gs2ew.provenance import UNKNOWN, CodeVersion
+from gs2ew.style import FigureOptions
+from gs2ew.timebase import TimeWindow
 
 #: Incremented if the layout of a bundle changes incompatibly.
 BUNDLE_FORMAT = 1
@@ -66,8 +71,8 @@ class PlotSpec:
 
     `compute` takes the GS2 dataset and returns the reduced data; it must also
     accept ``quiet``. `render` takes that reduced data and returns a figure.
-    `filename` picks the default output filename from the reduced data (for
-    example to mark a window average).
+    `filename` picks the default output filename, without a suffix, from the
+    reduced data (for example to mark a window average).
     """
 
     name: str
@@ -111,10 +116,10 @@ def make_plot(
     render_options: dict[str, Any] | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    dpi: int = 150,
-    tight_bbox: bool = True,
+    tight_bbox: bool = False,
     save_data: bool = True,
     quiet: bool = False,
+    options: FigureOptions | None = None,
 ) -> Path:
     """Compute, render and save the plot called `name`.
 
@@ -122,28 +127,34 @@ def make_plot(
     bundle, so the two cannot disagree. With `save_data` False only the figure
     is written (movie frames use this).
 
+    The figure is saved in each of `options`' formats (by default those set
+    by :func:`gs2ew.style.figure_options`), unless `filename` ends in one, in
+    which case only that format is saved.
+
     Returns
     -------
     Path
-        Path to the saved figure. Its bundle has the same stem and a ``.nc``
-        suffix.
+        Path to the saved figure, in the first format. Its bundle has the same
+        stem and a ``.nc`` suffix.
     """
     spec = get_spec(name)
     render_options = dict(render_options or {})
+    options = options or style.current()
 
     reduced = spec.compute(ds, **compute_options, quiet=quiet).load()
-    if filename is None:
-        filename = spec.filename(reduced)
+    stem, options = _split_filename(filename or spec.filename(reduced), options)
 
     recipe = {
         "plot": name,
         "compute": compute_options,
         "render": render_options,
-        "save": {"filename": filename, "dpi": dpi, "tight_bbox": tight_bbox},
+        "figure": _figure_recipe(options),
+        "save": {"filename": stem, "tight_bbox": tight_bbox},
     }
 
-    fig = spec.render(reduced, **render_options)
-    path = _save_figure(fig, Path(output_dir) / filename, dpi, tight_bbox, quiet)
+    path = _draw(
+        spec, reduced, render_options, options, Path(output_dir) / stem, tight_bbox, quiet
+    )
 
     if save_data:
         write_bundle(reduced, ds, recipe, path.with_suffix(".nc"), quiet=quiet)
@@ -152,14 +163,85 @@ def make_plot(
     return path
 
 
-def _save_figure(
-    fig: Figure, path: Path, dpi: int, tight_bbox: bool, quiet: bool
+#: File types matplotlib can save, which a filename's suffix may name.
+_FORMATS = set(FigureCanvasBase.get_supported_filetypes())
+
+
+def _split_filename(filename: str, options: FigureOptions) -> tuple[str, FigureOptions]:
+    """`filename` without a format suffix, and the formats to save it in."""
+    path = Path(filename)
+    suffix = path.suffix.lstrip(".").lower()
+    if suffix in _FORMATS:
+        return str(path.with_suffix("")), replace(options, formats=(suffix,))
+    return filename, options
+
+
+def _figure_recipe(options: FigureOptions) -> dict[str, Any]:
+    return {name: getattr(options, name) for name in FigureOptions.names()}
+
+
+def _recorded_options(rec: dict[str, Any]) -> tuple[str, FigureOptions]:
+    """The filename stem and figure options a recipe records.
+
+    Bundles from before figure options were recorded name a single PNG and
+    its resolution in their ``save`` section.
+    """
+    save = rec["save"]
+    if "figure" in rec:
+        return save["filename"], FigureOptions(**rec["figure"])
+    return _split_filename(save["filename"], FigureOptions(dpi=save.get("dpi", 150)))
+
+
+def _draw(
+    spec: PlotSpec,
+    reduced: xr.Dataset,
+    render_options: dict[str, Any],
+    options: FigureOptions,
+    stem: Path,
+    tight_bbox: bool,
+    quiet: bool,
+    embedded_style: str | None = None,
 ) -> Path:
+    """Render `reduced` in `options`' style and save it in each format.
+
+    Titles the figure with the averaging window, if there is one and
+    `options` asks for it. Returns the path in the first format.
+    """
     from gs2ew.plots._common import save_figure
 
-    return save_figure(
-        fig, path.parent, path.name, dpi=dpi, tight_bbox=tight_bbox, quiet=quiet
-    )
+    with style.context(options, embedded_style):
+        fig = spec.render(reduced, **render_options)
+        title = _window_title(reduced.attrs)
+        if options.title and title is not None:
+            # A legend above the panels takes the place a title would, so the
+            # title heads the legend instead.
+            if fig.legends:
+                fig.legends[0].set_title(title)
+            else:
+                fig.suptitle(title)
+        paths = [
+            save_figure(
+                fig,
+                stem.parent,
+                f"{stem.name}.{fmt}",
+                dpi=options.dpi,
+                tight_bbox=tight_bbox,
+                close=False,
+                quiet=quiet,
+            )
+            for fmt in options.formats
+        ]
+    import matplotlib.pyplot as plt
+
+    plt.close(fig)
+    return paths[0]
+
+
+def _window_title(attrs: dict[str, Any]) -> str | None:
+    """The averaging window, for a figure title; None if not averaged."""
+    if not {"tstart", "tend", "averaging"} <= set(attrs):
+        return None
+    return TimeWindow.from_attrs(attrs).title
 
 
 # --- Writing and reading bundles ----------------------------------------------
@@ -308,6 +390,10 @@ def write_bundle(
             {"long_name": "GS2 input file with every default filled in"},
         )
 
+    style_text = style.style_file(recipe["figure"]["style"])
+    if style_text is not None:
+        out.attrs["gs2ew_style_file"] = style_text
+
     gs2ew = provenance.gs2ew_version()
     out.attrs.update(
         {
@@ -417,7 +503,7 @@ def replot(
     output_dir: str | Path | None = None,
     filename: str | None = None,
     quiet: bool = False,
-    **render_overrides: Any,
+    **overrides: Any,
 ) -> Path:
     """Redraw the figure in the bundle at `path` from its reduced data.
 
@@ -425,49 +511,77 @@ def replot(
     where the recipe says, next to the bundle; with no overrides it is
     identical to the original.
 
-    `render_overrides` replace the recorded render options (e.g.
-    ``normalise=True``); the plot's ``render_<plot>`` function lists them.
-    Since the recipe in the original bundle would then no longer describe the
-    figure, a bundle with the updated recipe is written alongside the new
-    figure, so every figure keeps a bundle that describes it exactly.
+    `overrides` replace recorded render options (e.g. ``normalise=True``;
+    the plot's ``render_<plot>`` function lists them) or figure options
+    (``style``, ``width``, ``title``, ``formats``, ``dpi``; see
+    :class:`gs2ew.style.FigureOptions`). Since the recipe in the original
+    bundle would then no longer describe the figure, a bundle with the updated
+    recipe is written alongside the new figure, so every figure keeps a bundle
+    that describes it exactly.
 
     Raises
     ------
     ValueError
-        If a render override is not an option of this plot.
+        If an override is neither a render nor a figure option of this plot.
     """
     path = Path(path)
     bundle = read_bundle(path)
     spec = get_spec(bundle.attrs["gs2ew_plot"])
     rec = recipe(bundle)
 
-    known = set(inspect.signature(spec.render).parameters) - {"reduced"}
-    unknown = set(render_overrides) - known
+    figure_names = set(FigureOptions.names())
+    render_names = set(inspect.signature(spec.render).parameters) - {"reduced"}
+    unknown = set(overrides) - render_names - figure_names
     if unknown:
         raise ValueError(
             f"{spec.name} has no render option {', '.join(sorted(unknown))}; "
-            f"it has {', '.join(sorted(known)) or 'none'}."
+            f"it has {', '.join(sorted(render_names)) or 'none'}, and every "
+            f"plot has the figure options {', '.join(FigureOptions.names())}."
         )
 
-    render_options = {**rec["render"], **render_overrides}
-    save = rec["save"]
+    render_options = {
+        **rec["render"],
+        **{k: v for k, v in overrides.items() if k in render_names},
+    }
+    stem, options = _recorded_options(rec)
+    options = replace(
+        options, **{k: v for k, v in overrides.items() if k in figure_names}
+    )
+    if filename is not None:
+        stem, options = _split_filename(filename, options)
     output_dir = Path(output_dir) if output_dir is not None else path.parent
-    filename = filename or save["filename"]
 
-    fig = spec.render(reduced_data(bundle), **render_options)
-    figure = _save_figure(
-        fig, output_dir / filename, save["dpi"], save["tight_bbox"], quiet
+    # A style file of the user's is redrawn from the copy in the bundle,
+    # unless a new style was asked for.
+    embedded = None if "style" in overrides else bundle.attrs.get("gs2ew_style_file")
+
+    figure = _draw(
+        spec,
+        reduced_data(bundle),
+        render_options,
+        options,
+        output_dir / stem,
+        rec["save"].get("tight_bbox", False),
+        quiet,
+        embedded_style=embedded,
     )
 
     target = figure.with_suffix(".nc")
-    if render_overrides or target.resolve() != path.resolve():
+    if overrides or target.resolve() != path.resolve():
         updated = bundle.copy()
         rec["render"] = _jsonable(render_options)
-        rec["save"]["filename"] = filename
+        rec["figure"] = _figure_recipe(options)
+        rec["save"] = {**rec["save"], "filename": stem}
+        rec["save"].pop("dpi", None)
+        if "style" in overrides:
+            updated.attrs.pop("gs2ew_style_file", None)
+            text = style.style_file(options.style)
+            if text is not None:
+                updated.attrs["gs2ew_style_file"] = text
         gs2ew = provenance.gs2ew_version()
         updated.attrs.update(
             {
-                "gs2ew_recipe": json.dumps(rec),
+                "gs2ew_recipe": json.dumps(_jsonable(rec)),
                 "replot_command": f"gs2ew replot {shlex.quote(target.name)}",
                 # The render code may differ from the analysis code.
                 **{
@@ -547,16 +661,17 @@ def reproduce(
                 "be checked that this is the same run."
             )
 
+        stem, options = _recorded_options(rec)
         return make_plot(
             rec["plot"],
             ds,
             rec["compute"],
             rec["render"],
             output_dir=output_dir,
-            filename=rec["save"]["filename"],
-            dpi=rec["save"]["dpi"],
-            tight_bbox=rec["save"]["tight_bbox"],
+            filename=stem,
+            tight_bbox=rec["save"].get("tight_bbox", False),
             quiet=quiet,
+            options=options,
         )
 
 

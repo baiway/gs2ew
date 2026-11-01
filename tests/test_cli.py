@@ -70,6 +70,20 @@ class TestPlot:
         cli.main(["plot", str(run), "--no-data", *PILOT])
         assert not list((run / "gs2ew").glob("*.nc"))
 
+    def test_figure_options(self, run):
+        cli.main(
+            ["plot", str(run), "--format", "pdf", "--width", "3.4", "--no-title", *PILOT]
+        )
+        out = run / "gs2ew"
+        assert not list(out.glob("*.png"))
+        figure = bundle.recipe(bundle.read_bundle(out / "fields_by_mode.nc"))["figure"]
+        assert figure["formats"] == ["pdf"]
+        assert figure["width"] == 3.4 and figure["title"] is False
+
+    def test_unknown_style(self, run):
+        with pytest.raises(SystemExit, match="Unknown style 'nope'"):
+            cli.main(["plot", str(run), "--style", "nope", *PILOT])
+
     def test_ambiguous_run_dir(self, run):
         make_dataset().to_netcdf(run / "other.out.nc")
         with pytest.raises(SystemExit, match="holds 2"):
@@ -133,6 +147,16 @@ class TestReplotAndReproduce:
         ) == 0
         render = bundle.recipe(bundle.read_bundle(out / nc.name))["render"]
         assert render["normalise"] is True and render["ylim"] == [-1.1, 1.1]
+
+    def test_replot_figure_options(self, run):
+        cli.main(["plot", str(run), *PILOT])
+        nc = run / "gs2ew" / "fields_by_mode.nc"
+        out = run / "narrow"
+        cli.main(["replot", str(nc), "-o", str(out), "--set", "width=3.4",
+                  "--set", "formats=pdf"])
+        assert (out / "fields_by_mode.pdf").exists()
+        assert not (out / "fields_by_mode.png").exists()
+        assert bundle.recipe(bundle.read_bundle(out / nc.name))["figure"]["width"] == 3.4
 
     def test_unknown_override(self, run):
         cli.main(["plot", str(run), *PILOT])

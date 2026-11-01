@@ -117,7 +117,7 @@ def plot_transfer_hovmoller(
     tstart, tend : float, optional
         Restrict the time axis. Both default to the full run.
     filename : str, optional
-        Output filename. Defaults to ``transfer_hovmoller.png``.
+        Output filename. Defaults to ``transfer_hovmoller``.
     share : str, optional
         Colour-scale sharing: ``"row"`` (default) gives each quantity its own
         symmetric limit; ``"all"`` puts every panel on one scale.
@@ -305,7 +305,7 @@ register(
         "transfer_hovmoller",
         compute_transfer_hovmoller,
         render_transfer_hovmoller,
-        lambda reduced: "transfer_hovmoller.png",
+        lambda reduced: "transfer_hovmoller",
     )
 )
 register(
@@ -313,7 +313,7 @@ register(
         "transfer_butterfly",
         compute_transfer_butterfly,
         render_transfer_butterfly,
-        lambda reduced: f"transfer_butterfly_{reduced.attrs['reduction']}.png",
+        lambda reduced: f"transfer_butterfly_{reduced.attrs['reduction']}",
     )
 )
 

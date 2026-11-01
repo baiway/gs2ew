@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 from matplotlib.figure import Figure
@@ -126,18 +125,12 @@ def render_transfer_summary(reduced: xr.Dataset, show_std: bool = True) -> Figur
     tw = TimeWindow.from_attrs(reduced.attrs)
     has_tp = any(_population_name(q) in reduced for q in catalog.QUANTITIES)
 
-    n_panels = 2 if has_tp else 1
-    fig, axes = plt.subplots(
-        1, n_panels, figsize=(7.0 * n_panels, 4.8), squeeze=False
-    )
+    fig, axes = common.subplots(1, 2 if has_tp else 1, aspect=1.0)
 
     _by_field(axes[0][0], reduced, show_std and tw.averaging)
     if has_tp:
         _by_population(axes[0][1], reduced)
-
-    if tw.title is not None:
-        fig.suptitle(tw.title)
-    fig.tight_layout()
+    common.shared_legend(fig, axes[0])
     return fig
 
 
@@ -169,7 +162,7 @@ def plot_transfer_summary(
     Parameters
     ----------
     filename : str, optional
-        Output filename. Defaults to ``transfer_summary.png``.
+        Output filename. Defaults to ``transfer_summary``.
     jacobian : bool, optional
         Weight the theta integral by `jacob`. Default True.
     show_std : bool, optional
@@ -277,11 +270,10 @@ def _by_field(ax, reduced: xr.Dataset, show_std: bool) -> None:
 
     ax.axhline(0, color="k", linewidth=0.8)
     ax.set_xticks(x, labels)
-    ax.set_xlabel("mediator field", fontsize=11)
-    ax.set_ylabel(r"$\int \mathrm{d}\theta\, J\, N_\mathbf{k}$", fontsize=11)
+    ax.xaxis.grid(False)
+    ax.set_xlabel("mediator field")
+    ax.set_ylabel(r"$\int \mathrm{d}\theta\, J\, N_\mathbf{k}$")
     ax.set_title("net transfer by field")
-    ax.grid(alpha=0.3, axis="y")
-    ax.legend(fontsize=9)
 
 
 def _by_population(ax, reduced: xr.Dataset) -> None:
@@ -313,12 +305,11 @@ def _by_population(ax, reduced: xr.Dataset) -> None:
             bar.set_hatch(TP_HATCHES[tp_values[k % len(tp_values)]])
 
     ax.axhline(0, color="k", linewidth=0.8)
-    ax.set_xticks(x, labels, fontsize=9)
-    ax.set_xlabel("species and population", fontsize=11)
-    ax.set_ylabel(r"$\int \mathrm{d}\theta\, J\, N_\mathbf{k}$", fontsize=11)
+    ax.set_xticks(x, labels)
+    ax.xaxis.grid(False)
+    ax.set_xlabel("species and population")
+    ax.set_ylabel(r"$\int \mathrm{d}\theta\, J\, N_\mathbf{k}$")
     ax.set_title("net transfer by population (all fields)")
-    ax.grid(alpha=0.3, axis="y")
-    ax.legend(fontsize=9)
 
 
 register(
@@ -326,7 +317,7 @@ register(
         "transfer_summary",
         compute_transfer_summary,
         render_transfer_summary,
-        lambda reduced: "transfer_summary.png",
+        lambda reduced: "transfer_summary",
     )
 )
 

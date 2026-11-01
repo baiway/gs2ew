@@ -17,6 +17,7 @@ Layout:
 * :mod:`gs2ew.io`, :mod:`gs2ew.metadata`, :mod:`gs2ew.weights` — reading files
 * :mod:`gs2ew.provenance` — code versions, input decks and source identity
 * :mod:`gs2ew.bundle` — the reduced data and provenance saved with each plot
+* :mod:`gs2ew.style` — how figures look, and the formats they are saved in
 * :mod:`gs2ew.plots` — the plotting routines themselves
 """
 
@@ -83,16 +84,19 @@ from gs2ew.plots.weights import (
     render_weights,
     render_wl_by_lambda,
 )
+from gs2ew.style import FigureOptions, figure_options
 from gs2ew.timebase import TimeWindow, frame_indices, resolve_window
 
 __all__ = [
     # Core
     "CodeVersion",
     "Drive",
+    "FigureOptions",
     "RunFiles",
     "TimeWindow",
     "available_drives",
     "detect_saturation_time",
+    "figure_options",
     "find_run",
     "frame_indices",
     "get_metadata",

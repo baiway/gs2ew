@@ -2,12 +2,12 @@
 
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 from matplotlib.figure import Figure
 
 from gs2ew.bundle import PlotSpec, make_plot, register
+from gs2ew.plots import _common as common
 from gs2ew.weights import get_weights
 
 
@@ -45,26 +45,29 @@ def render_weights(reduced: xr.Dataset) -> Figure:
     lam = reduced["wl"].coords["lambda"].values
     wl = reduced["wl"].values
 
-    fig, (ax_w, ax_wl) = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axes = common.subplots(1, 2, aspect=0.8)
+    ax_w, ax_wl = axes[0]
 
     # Left: energy weights — one curve per species
     for i in range(nspec):
-        ax_w.plot(energy[i], w[i], linewidth=1.5, label=f"Species {i + 1}")
-    ax_w.set_xlabel(r"$\varepsilon$", fontsize=12)
-    ax_w.set_ylabel(r"$w(\varepsilon, s)$", fontsize=12)
+        ax_w.plot(energy[i], w[i], label=f"species {i + 1}")
+    ax_w.set_xlabel(r"$\varepsilon$")
+    ax_w.set_ylabel(r"$w(\varepsilon, s)$")
     if nspec > 1:
         ax_w.legend()
-    ax_w.grid(alpha=0.3)
 
     # Right: pitch-angle weights — 2D heatmap over (theta, lambda)
-    # wl has shape (nlambda, ntheta), so pcolormesh(theta, lambda, wl) is correct
-    pcm = ax_wl.pcolormesh(theta, lam, wl, shading="auto")
+    # wl has shape (nlambda, ntheta), so pcolormesh(theta, lambda, wl) is correct.
+    # The weights are positive, so a sequential map rather than the style's
+    # diverging one.
+    pcm = ax_wl.pcolormesh(
+        theta, lam, wl, shading="auto", cmap="viridis", rasterized=True
+    )
     fig.colorbar(pcm, ax=ax_wl)
-    ax_wl.set_xlabel(r"$\theta$", fontsize=12)
-    ax_wl.set_ylabel(r"$\lambda$", fontsize=12)
+    ax_wl.grid(False)
+    ax_wl.set_xlabel(r"$\theta$")
+    ax_wl.set_ylabel(r"$\lambda$")
     ax_wl.set_title(r"$w_\lambda(\lambda, \theta)$")
-
-    plt.tight_layout()
     return fig
 
 
@@ -100,7 +103,7 @@ def plot_weights(
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is `"outputs"`.
     filename : str, optional
-        Filename for the plot. If None, uses `"weights.png"`.
+        Filename for the plot. If None, uses `"weights"`.
     save_data : bool, optional
         Write the plotted data and its provenance alongside the figure; see
         :mod:`gs2ew.bundle`. Default True.
@@ -139,28 +142,19 @@ def render_wl_by_lambda(reduced: xr.Dataset, ncols: int = 6) -> Figure:
 
     nrows = int(np.ceil(ntheta / ncols))
 
-    # Fixed width; height scales with the number of rows so each subplot
-    # stays a consistent size even for large theta grids.
-    fig, axes = plt.subplots(
-        nrows, ncols,
-        figsize=(14, nrows * 2.5),
-        sharex=True, sharey=True,
-    )
-    # Ensure axes is always a 2D array for uniform indexing
-    axes = np.array(axes).reshape(nrows, ncols)
+    # The style's width; height scales with the number of rows so each
+    # subplot stays a consistent size even for large theta grids.
+    fig, axes = common.subplots(nrows, ncols, aspect=0.8, sharex=True, sharey=True)
 
     for i, ax in enumerate(axes.flat):
         if i < ntheta:
-            ax.plot(lam, wl[:, i], "x-", linewidth=0.8, markersize=4,
-                    markeredgewidth=0.8)
-            ax.set_title(rf"$\theta = {theta[i]:.2f}$", fontsize=8)
-            ax.grid(alpha=0.3)
+            ax.plot(lam, wl[:, i], "x-", linewidth=0.8, markeredgewidth=0.8)
+            ax.set_title(rf"$\theta = {theta[i]:.2f}$", fontsize="small")
         else:
             ax.set_visible(False)
 
-    fig.supxlabel(r"$\lambda$", fontsize=12)
-    fig.supylabel(r"$w_\lambda$", fontsize=12)
-    plt.tight_layout()
+    fig.supxlabel(r"$\lambda$")
+    fig.supylabel(r"$w_\lambda$")
     return fig
 
 
@@ -191,7 +185,7 @@ def plot_wl_by_lambda(
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is `"outputs"`.
     filename : str, optional
-        Filename for the plot. If None, uses `"wl_by_lambda.png"`.
+        Filename for the plot. If None, uses `"wl_by_lambda"`.
     ncols : int, optional
         Number of subplot columns. Default is 6.
     save_data : bool, optional
@@ -223,13 +217,13 @@ def plot_wl_by_lambda(
 
 
 register(
-    PlotSpec("weights", compute_weights, render_weights, lambda reduced: "weights.png")
+    PlotSpec("weights", compute_weights, render_weights, lambda reduced: "weights")
 )
 register(
     PlotSpec(
         "wl_by_lambda",
         compute_weights,
         render_wl_by_lambda,
-        lambda reduced: "wl_by_lambda.png",
+        lambda reduced: "wl_by_lambda",
     )
 )

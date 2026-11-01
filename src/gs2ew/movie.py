@@ -16,6 +16,12 @@ from pathlib import Path
 
 import numpy as np
 
+from gs2ew.style import figure_options
+
+#: Frames are drawn at the figure's printed size, about 6 in wide by default,
+#: which this resolution makes about 1200 pixels.
+FRAME_DPI = 200
+
 #: Signature of a per-frame renderer: given the frame's output path and the
 #: time index it should show, draw and save exactly one figure.
 FrameRenderer = Callable[[Path, int], None]
@@ -37,8 +43,8 @@ def render_movie(
     render_frame : callable
         Called as ``render_frame(frame_path, t_index)`` for each frame. Must
         save a PNG at `frame_path`. Every frame must come out at identical
-        pixel dimensions, so frame renderers save with a fixed canvas size
-        (``bbox_inches=None``) rather than a tight bounding box.
+        pixel dimensions, so frame renderers save at the size the figure was
+        drawn, rather than cropped to a tight bounding box.
     indices : numpy.ndarray
         Time indices to render, typically from
         :func:`gs2ew.timebase.frame_indices`.
@@ -76,11 +82,12 @@ def render_movie(
     if verbose:
         print(f"Rendering {n_frames} frames to {frames_dir}...")
 
-    for frame_num, t_index in enumerate(indices):
-        frame_path = frames_dir / f"frame_{frame_num:06d}.png"
-        render_frame(frame_path, int(t_index))
-        if verbose:
-            print(f"  frame {frame_num + 1}/{n_frames}", flush=True)
+    with figure_options(dpi=FRAME_DPI):
+        for frame_num, t_index in enumerate(indices):
+            frame_path = frames_dir / f"frame_{frame_num:06d}.png"
+            render_frame(frame_path, int(t_index))
+            if verbose:
+                print(f"  frame {frame_num + 1}/{n_frames}", flush=True)
 
     _encode(frames_dir, output_path, fps=fps, crf=crf)
 

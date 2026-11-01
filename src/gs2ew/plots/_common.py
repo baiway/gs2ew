@@ -13,20 +13,17 @@ from gs2ew import catalog
 from gs2ew.catalog import Drive
 from gs2ew.timebase import TimeWindow
 
-#: Fixed colour per transferred quantity, from the Okabe-Ito colourblind-safe
-#: palette. Assigned by quantity rather than taken from a cycler, so U is the
-#: same blue whether or not H and S happen to be present in a given run.
-#: U, H, S and KE were checked for CVD separation against a light surface
-#: (worst adjacent pair dE 11.0 deutan, 25.4 normal). The two parts of the U
-#: split were added later and were not part of that check; they are also drawn
-#: dotted, so they never rely on hue alone.
+#: Fixed colour per transferred quantity: its place in the style's colour
+#: cycle, so a style sets the colours (gs2ew's ``print`` style uses the
+#: Okabe-Ito palette). Assigned by quantity rather than taken in turn, so U is
+#: the same colour whether or not H and S happen to be present in a given run.
 QUANTITY_COLOURS: dict[str, str] = {
-    "U": "#0072B2",        # blue
-    "H": "#D55E00",        # vermillion
-    "S": "#009E73",        # bluish green
-    "KE": "#CC79A7",       # reddish purple
-    "U_field": "#56B4E9",  # sky blue
-    "U_flr": "#E69F00",    # orange
+    "U": "C0",
+    "H": "C1",
+    "S": "C2",
+    "KE": "C3",
+    "U_field": "C4",
+    "U_flr": "C5",
 }
 
 #: The kinetic-energy transfer is drawn dashed and the parts of the U split
@@ -44,24 +41,72 @@ def drive_linestyle(drive: Drive) -> str:
     return QUANTITY_LINESTYLES.get(drive.quantity, "-")
 
 
-#: Diverging colormap for signed quantities. Every transfer heatmap uses this
-#: with symmetric limits, so white always means zero net transfer.
-DIVERGING_CMAP = "RdBu_r"
+#: Height over width of a figure that is too wide for its panels' own aspect.
+GOLDEN = (5**0.5 - 1) / 2
+
+
+def subplots(nrows: int, ncols: int, aspect: float, **kwargs):
+    """`plt.subplots` at the style's figure width, with constrained layout.
+
+    Each panel is `aspect` times as tall as it is wide, but no taller than a
+    golden-ratio figure of the full width, so a single panel is not page-high,
+    and the figure is no taller than 1.5 times its width, about a page of
+    text. The figure is exactly the style's width: the layout fits labels,
+    legends and colorbars inside it rather than the saved figure being
+    cropped.
+    """
+    import matplotlib.pyplot as plt
+
+    width = plt.rcParams["figure.figsize"][0]
+    panel = min(width / ncols * aspect, width * GOLDEN)
+    return plt.subplots(
+        nrows,
+        ncols,
+        figsize=(width, min(panel * nrows, 1.5 * width)),
+        squeeze=False,
+        layout="constrained",
+        **kwargs,
+    )
+
+
+def figure_legend(fig: Figure, handles, labels) -> None:
+    """One legend for the whole figure, in rows above the panels."""
+    width = fig.get_figwidth()
+    fig.legend(
+        handles,
+        labels,
+        loc="outside upper center",
+        ncols=max(1, min(len(labels), int(width / 1.5))),
+    )
+
+
+def shared_legend(fig: Figure, axes) -> None:
+    """:func:`figure_legend` for the curves in `axes`, each label once."""
+    handles: dict[str, object] = {}
+    for ax in axes:
+        for handle, label in zip(*ax.get_legend_handles_labels()):
+            handles.setdefault(label, handle)
+    figure_legend(fig, list(handles.values()), list(handles))
 
 
 def save_figure(
     fig: Figure,
     output_dir: str | Path,
     filename: str,
-    dpi: int = 150,
-    tight_bbox: bool = True,
+    dpi: int = 300,
+    tight_bbox: bool = False,
+    close: bool = True,
     quiet: bool = False,
 ) -> Path:
-    """Save `fig` into `output_dir` and close it.
+    """Save `fig` into `output_dir`, and close it unless `close` is False.
 
-    `tight_bbox` must be False for movie frames: a tight bounding box crops to
-    the drawn content, so frames would come out at different pixel sizes and
-    ffmpeg would refuse to encode them.
+    A tight bounding box crops to the drawn content, so the figure is no
+    longer the size it was drawn at; gs2ew's plots use constrained layout
+    instead. Movie frames in particular must all be the same size, or ffmpeg
+    refuses to encode them.
+
+    PDFs are written without a creation date, so redrawing a figure gives an
+    identical file that does not show up as a change in version control.
     """
     import matplotlib.pyplot as plt
 
@@ -69,8 +114,15 @@ def save_figure(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / filename
 
-    fig.savefig(output_path, dpi=dpi, bbox_inches="tight" if tight_bbox else None)
-    plt.close(fig)
+    metadata = {"CreationDate": None} if output_path.suffix == ".pdf" else None
+    fig.savefig(
+        output_path,
+        dpi=dpi,
+        bbox_inches="tight" if tight_bbox else None,
+        metadata=metadata,
+    )
+    if close:
+        plt.close(fig)
 
     if not quiet:
         print(f"Saved {output_path}")
@@ -259,18 +311,20 @@ def heatmap_grid(
     vmax: float | None = None,
     share: str = "row",
     percentile: float = 100.0,
-    panel_size: tuple[float, float] = (4.6, 3.6),
+    aspect: float = 0.8,
 ):
     """Lay out one diverging heatmap per drive on a quantity-by-field grid.
 
-    Every panel uses a symmetric colour scale so the colormap's neutral
-    midpoint always means zero net transfer. `share` controls how the scale is
+    Every panel uses the style's ``image.cmap`` on a symmetric colour scale,
+    so the colormap's neutral midpoint always means zero net transfer. `share` controls how the scale is
     chosen: ``"row"`` gives each quantity its own limit (fields comparable
     within a quantity), ``"all"`` gives every panel the same limit (everything
     comparable, but small quantities wash out).
 
     `percentile` clips the colour limit to that percentile of ``|value|``
     rather than its maximum; see :func:`symmetric_limit`.
+
+    `aspect` is each panel's height over its width.
 
     `panels` maps each drive to a ``(len(y), len(x))`` array. The
     kinetic-energy drive, having no mediator field, takes the first column of
@@ -281,22 +335,10 @@ def heatmap_grid(
     matplotlib.figure.Figure
         The populated figure. The caller saves and closes it.
     """
-    import matplotlib.pyplot as plt
-
     drives = list(panels)
     rows, cols = drive_grid(drives)
 
-    fig, axes = plt.subplots(
-        len(rows),
-        len(cols),
-        figsize=(panel_size[0] * len(cols), panel_size[1] * len(rows)),
-        sharex=True,
-        sharey=True,
-        squeeze=False,
-        # Constrained layout places the colorbars without overlapping the
-        # axes, which tight_layout cannot do for a colorbar spanning a row.
-        layout="constrained",
-    )
+    fig, axes = subplots(len(rows), len(cols), aspect, sharex=True, sharey=True)
 
     global_limit = (
         symmetric_limit(*panels.values(), percentile=percentile)
@@ -330,17 +372,17 @@ def heatmap_grid(
                 x,
                 y,
                 by_key[key],
-                cmap=DIVERGING_CMAP,
                 vmin=-limit,
                 vmax=limit,
                 shading="auto",
                 rasterized=True,
             )
-            ax.set_title(Drive(quantity, field).label(), fontsize=11)
+            ax.set_title(Drive(quantity, field).label())
+            ax.grid(False)
             if i == len(rows) - 1:
-                ax.set_xlabel(xlabel, fontsize=11)
+                ax.set_xlabel(xlabel)
             if j == 0:
-                ax.set_ylabel(ylabel, fontsize=11)
+                ax.set_ylabel(ylabel)
 
         if mesh is not None:
             fig.colorbar(mesh, ax=axes[i], label=cbar_label, shrink=0.85)
@@ -348,9 +390,9 @@ def heatmap_grid(
     return fig
 
 
-def default_filename(stem: str, window_averaged: bool, suffix: str = ".png") -> str:
-    """Filename for a plot, marking whether it is a window average."""
-    return f"{stem}_averaged{suffix}" if window_averaged else f"{stem}{suffix}"
+def default_filename(stem: str, window_averaged: bool) -> str:
+    """Filename for a plot, without a suffix, marking a window average."""
+    return f"{stem}_averaged" if window_averaged else stem
 
 
 def species_labels(ds: xr.Dataset) -> list[str]:
@@ -380,12 +422,15 @@ def species_labels(ds: xr.Dataset) -> list[str]:
 
 
 __all__ = [
-    "DIVERGING_CMAP",
+    "GOLDEN",
     "QUANTITY_COLOURS",
     "QUANTITY_LINESTYLES",
     "drive_colour",
     "drive_linestyle",
+    "figure_legend",
     "save_figure",
+    "shared_legend",
+    "subplots",
     "time_mean",
     "time_std",
     "derived_attrs",
