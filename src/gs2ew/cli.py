@@ -105,11 +105,15 @@ def cmd_info(args: argparse.Namespace) -> int:
             )
             print(f"  {reduction:<16} {names or '(none)'}")
 
-        print("\n=== Identity check (H = U - S) ===")
-        for field in catalog.FIELDS:
-            residual = catalog.identity_residual(ds, field)
-            if residual == residual:  # not NaN
-                print(f"  {field:<5} max relative residual {residual:.2e}")
+        print("\n=== Identity checks ===")
+        for identity in catalog.IDENTITIES:
+            for field in catalog.FIELDS:
+                residual = catalog.identity_residual(ds, field, identity=identity)
+                if residual == residual:  # not NaN
+                    print(
+                        f"  {identity:<20} {field:<5} "
+                        f"max relative residual {residual:.2e}"
+                    )
     return 0
 
 

@@ -22,6 +22,16 @@ class TestVarname:
             == "entropy_transfer_bpar_trapped_passing"
         )
 
+    def test_split_parts(self):
+        assert (
+            Drive("U_field", "phi").varname()
+            == "fluctuation_energy_field_transfer_phi_theta"
+        )
+        assert (
+            Drive("U_flr", "bpar").varname("trapped_passing")
+            == "fluctuation_energy_flr_transfer_bpar_trapped_passing"
+        )
+
     def test_kinetic(self):
         assert Drive("KE").varname() == "kinetic_energy_transfer_theta"
         assert (
@@ -40,7 +50,7 @@ class TestVarname:
 class TestAvailableDrives:
     def test_finds_everything(self, ds):
         drives = catalog.available_drives(ds)
-        assert len(drives) == 10  # 3 quantities x 3 fields, plus kinetic
+        assert len(drives) == 16  # 5 quantities x 3 fields, plus kinetic
         assert Drive("KE") in drives
 
     def test_electrostatic_run(self, ds_es):
@@ -57,6 +67,18 @@ class TestAvailableDrives:
 
     def test_exclude_kinetic(self, ds):
         assert Drive("KE") not in catalog.available_drives(ds, include_kinetic=False)
+
+    def test_field_only_part_has_no_trapped_passing(self, ds):
+        quantities = {
+            d.quantity for d in catalog.available_drives(ds, "trapped_passing")
+        }
+        assert "U_flr" in quantities
+        assert "U_field" not in quantities
+
+    def test_split_is_optional(self):
+        unsplit = make_dataset(split=False)
+        quantities = {d.quantity for d in catalog.available_drives(unsplit)}
+        assert quantities == {"U", "H", "S", "KE"}
 
     def test_missing_diagnostics(self):
         empty = make_dataset(fields=(), kinetic=False, trapped_passing=False)
@@ -82,10 +104,45 @@ class TestLabels:
     def test_short_label_drops_the_field(self):
         assert Drive("H", "bpar").label_short() == r"$N_\mathbf{k}^{H}$"
 
+    def test_split_labels_use_symbols(self):
+        assert (
+            Drive("U_flr", "phi").label()
+            == r"$N_\mathbf{k}^{U_\mathrm{FLR},\delta\phi}$"
+        )
+        assert (
+            Drive("U_field", "apar").label_short()
+            == r"$N_\mathbf{k}^{U_\mathrm{field}}$"
+        )
+
 
 class TestIdentity:
     def test_holds_for_synthetic_data(self, ds):
         assert catalog.identity_residual(ds, "phi") < 1e-12
+
+    @pytest.mark.parametrize("reduction", ["theta", "kxtarget"])
+    def test_split_holds_where_summed_over_sources(self, ds, reduction):
+        residual = catalog.identity_residual(
+            ds, "apar", reduction, identity="U = U_field + U_flr"
+        )
+        assert residual < 1e-12
+
+    @pytest.mark.parametrize("reduction", ["kxsource", "kysource", "trapped_passing"])
+    def test_split_refused_where_it_does_not_hold(self, ds, reduction):
+        with pytest.raises(ValueError, match="does not hold"):
+            catalog.identity_residual(
+                ds, "phi", reduction, identity="U = U_field + U_flr"
+            )
+
+    def test_split_nan_when_not_written(self):
+        unsplit = make_dataset(split=False)
+        residual = catalog.identity_residual(
+            unsplit, "phi", identity="U = U_field + U_flr"
+        )
+        assert residual != residual  # NaN
+
+    def test_unknown_identity(self, ds):
+        with pytest.raises(ValueError, match="Unknown identity"):
+            catalog.identity_residual(ds, "phi", identity="E = mc^2")
 
     def test_nan_when_absent(self, ds_es):
         assert catalog.identity_residual(ds_es, "apar") != catalog.identity_residual(

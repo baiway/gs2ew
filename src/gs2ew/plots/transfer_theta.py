@@ -74,8 +74,9 @@ def plot_transfer_theta(
         Shade each curve with a +/-1 standard deviation band over the averaging
         window. Ignored when not averaging. Default False.
     quantities, fields : list of str, optional
-        Restrict to these quantities (``"U"``, ``"H"``, ``"S"``) or mediator
-        fields. None means everything present.
+        Restrict to these quantities (keys of
+        :data:`~gs2ew.catalog.QUANTITIES`) or mediator fields. None means
+        everything present.
     include_kinetic : bool, optional
         Include the kinetic-energy transfer. Default True.
     ylim : tuple of float, optional

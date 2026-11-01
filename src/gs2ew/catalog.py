@@ -1,19 +1,22 @@
-"""Registry of GS2's nonlinear-transfer netCDF variables.
+r"""Registry of GS2's nonlinear-transfer netCDF variables.
 
-GS2 writes the nonlinear drive of the zonal modes for three related
+GS2 writes the nonlinear drive of the zonal modes for several related
 quantities, each broken down by the *mediator* field that carries the
 coupling and by one of several reductions over the triad wavevectors:
 
     <quantity>_transfer_<field>_theta[_<reduction>]
     <quantity>_transfer_<field>_trapped_passing
 
-with ``quantity`` in ``{free_energy, entropy, fluctuation_energy}`` and
-``field`` in ``{phi, apar, bpar}``. The kinetic-energy transfer has no field
-decomposition and is written as ``kinetic_energy_transfer_theta[_<reduction>]``.
+with ``quantity`` in ``{free_energy, entropy, fluctuation_energy,
+fluctuation_energy_field, fluctuation_energy_flr}`` and ``field`` in ``{phi,
+apar, bpar}``. The kinetic-energy transfer has no field decomposition and is
+written as ``kinetic_energy_transfer_theta[_<reduction>]``.
 
-The three quantities satisfy :math:`H = U - S` in the stored sign convention
-(GS2 folds the sign of the entropy integrand into the written array), which
-:func:`identity_residual` checks.
+The quantities satisfy two identities, which :func:`identity_residual`
+checks: :math:`H = U - S` in the stored sign convention (GS2 folds the sign
+of the entropy integrand into the written array), and
+:math:`U = U_\mathrm{field} + U_\mathrm{FLR}` for the optional split of the
+fluctuation energy transfer.
 
 This module is the single place that knows those names. Everything else works
 in terms of :class:`Drive` objects and asks the catalogue for the data, so
@@ -38,11 +41,22 @@ FIELDS: dict[str, str] = {
 
 # Transferred quantities: plot key -> (netCDF stem, human-readable name).
 # `U` is written directly by GS2 (commit 17a7177ea); older analysis code
-# derived it as `H + S`, which is no longer necessary.
+# derived it as `H + S`, which is no longer necessary. `U_field` and `U_flr`
+# split U into its field-only and FLR parts, and are only written with
+# `write_fluctuation_energy_transfer_split`. The field-only part has no
+# velocity-space resolution, so no `_trapped_passing` output.
 QUANTITIES: dict[str, tuple[str, str]] = {
     "U": ("fluctuation_energy", "fluctuation energy"),
     "H": ("free_energy", "free energy"),
     "S": ("entropy", "entropy"),
+    "U_field": ("fluctuation_energy_field", "fluctuation energy (field-only part)"),
+    "U_flr": ("fluctuation_energy_flr", "fluctuation energy (FLR part)"),
+}
+
+# LaTeX symbol for each quantity in drive labels, where it differs from the key.
+QUANTITY_SYMBOLS: dict[str, str] = {
+    "U_field": r"U_\mathrm{field}",
+    "U_flr": r"U_\mathrm{FLR}",
 }
 
 # The kinetic-energy transfer is a separate diagnostic with no mediator-field
@@ -67,8 +81,10 @@ K_LABELS: dict[str, str] = {
     "kys_ext": r"$k_{ys}\rho_\mathrm{ref}$",
 }
 
-# The `tp` axis is 1-based in the file: 1 = passing, 2 = trapped (marginally
-# trapped `wfb` particles are counted as trapped).
+# The `tp` axis is 1-based in the file: 1 = passing, 2 = trapped. The
+# marginally trapped `wfb` particles are counted as passing when the run sets
+# `wfbbc_option = 'passing'`, and as trapped otherwise; the `tp` dimension's
+# `long_name` in the file records which.
 TP_LABELS: dict[int, str] = {1: "passing", 2: "trapped"}
 
 
@@ -111,12 +127,17 @@ class Drive:
         stem, _ = QUANTITIES[self.quantity]
         return f"{stem}_transfer_{self.field}_theta{suffix}"
 
+    @property
+    def symbol(self) -> str:
+        r"""LaTeX symbol for the transferred quantity, e.g. ``U_\mathrm{FLR}``."""
+        return QUANTITY_SYMBOLS.get(self.quantity, self.quantity)
+
     def label(self) -> str:
         r"""Full LaTeX label, e.g. ``$N_\mathbf{k}^{U,\delta\phi}$``."""
         if self.is_kinetic:
             return KINETIC_LABEL
         sym = FIELDS[self.field]
-        return rf"$N_\mathbf{{k}}^{{{self.quantity},{sym}}}$"
+        return rf"$N_\mathbf{{k}}^{{{self.symbol},{sym}}}$"
 
     def label_short(self) -> str:
         r"""Field-free label, e.g. ``$N_\mathbf{k}^{U}$``.
@@ -126,7 +147,7 @@ class Drive:
         """
         if self.is_kinetic:
             return KINETIC_LABEL
-        return rf"$N_\mathbf{{k}}^{{{self.quantity}}}$"
+        return rf"$N_\mathbf{{k}}^{{{self.symbol}}}$"
 
 
 def available_drives(
@@ -206,31 +227,76 @@ def field_columns(drives: list[Drive]) -> list[tuple[str | None, list[Drive]]]:
     return list(columns.items())
 
 
-def identity_residual(ds: xr.Dataset, field: str, reduction: str = "theta") -> float:
-    """Max relative residual of the identity :math:`H = U - S` for `field`.
+# Identities between the stored quantities: name -> (lhs, ((term, sign), ...),
+# reductions where it holds). GS2 builds H, S and U from the same integrand,
+# so H = U - S holds bin-by-bin everywhere. The U split relies on the symmetry
+# of the triad sum under exchange of source and mediator, so it only holds once
+# summed over source wavevectors, and U_field has no trapped/passing output.
+IDENTITIES: dict[str, tuple[str, tuple[tuple[str, int], ...], tuple[str, ...]]] = {
+    "H = U - S": (
+        "H",
+        (("U", 1), ("S", -1)),
+        ("theta", "kxsource", "kxtarget", "kysource", "trapped_passing"),
+    ),
+    "U = U_field + U_flr": (
+        "U",
+        (("U_field", 1), ("U_flr", 1)),
+        ("theta", "kxtarget"),
+    ),
+}
 
-    GS2 derives all three quantities from the same triad integrand, so this
-    should be at round-off (order 1e-15). A large value means the three
-    outputs did not come from the same run or the sign convention has changed.
 
-    Returns NaN if any of the three variables is absent.
+def identity_residual(
+    ds: xr.Dataset,
+    field: str,
+    reduction: str = "theta",
+    identity: str = "H = U - S",
+) -> float:
+    """Max relative residual of one of :data:`IDENTITIES` for `field`.
+
+    The quantities on either side come from the same triad integrand, so this
+    should be at round-off (order 1e-15). A large value means the outputs did
+    not come from the same run or the sign convention has changed.
+
+    Returns NaN if any of the variables involved is absent.
+
+    Raises
+    ------
+    ValueError
+        If `identity` is unknown, or does not hold for `reduction`.
     """
     try:
-        H = load(ds, Drive("H", field), reduction).values
-        S = load(ds, Drive("S", field), reduction).values
-        U = load(ds, Drive("U", field), reduction).values
+        lhs_key, terms, reductions = IDENTITIES[identity]
+    except KeyError:
+        raise ValueError(
+            f"Unknown identity {identity!r}; expected one of {list(IDENTITIES)}."
+        ) from None
+    if reduction not in reductions:
+        raise ValueError(
+            f"{identity!r} does not hold for the {reduction!r} reduction; "
+            f"only for {list(reductions)}."
+        )
+
+    try:
+        lhs = load(ds, Drive(lhs_key, field), reduction).values
+        rhs = sum(
+            sign * load(ds, Drive(key, field), reduction).values
+            for key, sign in terms
+        )
     except KeyError:
         return float("nan")
 
-    scale = np.nanmax(np.abs(H))
+    scale = np.nanmax(np.abs(lhs))
     if scale == 0:
         return 0.0
-    return float(np.nanmax(np.abs(H - (U - S))) / scale)
+    return float(np.nanmax(np.abs(lhs - rhs)) / scale)
 
 
 __all__ = [
     "FIELDS",
     "QUANTITIES",
+    "QUANTITY_SYMBOLS",
+    "IDENTITIES",
     "KINETIC",
     "KINETIC_LABEL",
     "REDUCTIONS",

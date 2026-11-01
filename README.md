@@ -87,6 +87,12 @@ separate, purely electrostatic diagnostic with no field decomposition.
 All three quantities are written directly; `U` is **not** derived here. They
 satisfy $H = U - S$ in the stored sign convention, which `gs2ew info` checks.
 
+With `write_fluctuation_energy_transfer_split`, GS2 also writes U's field-only
+and FLR parts (`fluctuation_energy_field_*` and `fluctuation_energy_flr_*`,
+quantity keys `U_field` and `U_flr`); see GS2's
+`diagnostics_free_energy_transfer` for their definitions. `gs2ew info` checks
+that they sum to U where they should (`theta` and `kxtarget` only).
+
 Each quantity comes in five reductions:
 
 | Reduction | Dimensions | Meaning |
@@ -139,10 +145,8 @@ Movies default `tstart` to `"saturation"` rather than the last timestep.
 
 ### Targeted GS2 version
 
-The `fix/kinetic-energy-transfer-prefactor` branch, which writes
-`kinetic_energy_transfer_theta`. The sign error that earlier versions of this
-package corrected on the analysis side was fixed upstream in `6ce9ef660`, so
-there is no longer any sign correction here.
+The `experimental/electromagnetic-entropy-transfer-field-flr-split` branch.
+Its transfer diagnostics have not been tested yet.
 
 ## Development
 

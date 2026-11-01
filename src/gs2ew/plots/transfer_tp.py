@@ -2,7 +2,8 @@ r"""Nonlinear transfer split by trapped and passing particles.
 
 GS2 writes ``<quantity>_transfer_<field>_trapped_passing`` with dimensions
 ``(t, species, tp, theta, kxt_shift)``, where ``tp = 1`` is passing and
-``tp = 2`` is trapped (marginally trapped `wfb` particles count as trapped).
+``tp = 2`` is trapped (marginally trapped `wfb` particles count as passing
+when ``wfbbc_option = 'passing'``, and as trapped otherwise).
 These replaced the old fully velocity-resolved arrays: they answer the
 question that mattered — whether trapped or passing particles carry the
 transfer — at a small fraction of the size.
@@ -312,7 +313,8 @@ def plot_transfer_trapped_passing_spectral(
     Parameters
     ----------
     quantity : str, optional
-        Transferred quantity, one of ``"U"`` (default), ``"H"``, ``"S"``.
+        Transferred quantity: ``"U"`` (default), ``"H"``, ``"S"`` or
+        ``"U_flr"``. (``"U_field"`` has no trapped/passing output.)
     field : str, optional
         Mediator field. Default ``"phi"``.
     vmax : float, optional

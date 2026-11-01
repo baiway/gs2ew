@@ -32,6 +32,7 @@ def make_dataset(
     reductions: tuple[str, ...] = ("theta", "kxsource", "kxtarget", "kysource"),
     trapped_passing: bool = True,
     kinetic: bool = True,
+    split: bool = True,
     nt: int = 24,
     ntheta: int = 9,
     nk: int = 7,
@@ -43,6 +44,11 @@ def make_dataset(
     The three quantities are constructed so ``H = U - S`` holds exactly, as it
     does in real output, and the wavevector reductions sum to the plain
     `_theta` variable.
+
+    With `split`, the field-only and FLR parts of U are added too. Like GS2's,
+    they sum to U only in the `theta` and `kxtarget` reductions; in the
+    source-resolved reductions they are independent of U. Only the FLR part
+    has trapped/passing output.
     """
     rng = np.random.default_rng(seed)
 
@@ -86,6 +92,20 @@ def make_dataset(
                 suffix, _ = catalog.REDUCTIONS[reduction]
                 data[f"{stem}_transfer_{field}_theta{suffix}"] = (dims, values)
 
+            if split:
+                u_field = rng.normal(size=u.shape)
+                u_flr = (
+                    u - u_field
+                    if reduction in ("theta", "kxtarget")
+                    else rng.normal(size=u.shape)
+                )
+                suffix, _ = catalog.REDUCTIONS[reduction]
+                for stem, values in (
+                    ("fluctuation_energy_field", u_field),
+                    ("fluctuation_energy_flr", u_flr),
+                ):
+                    data[f"{stem}_transfer_{field}_theta{suffix}"] = (dims, values)
+
         if trapped_passing:
             dims = ("t", "species", "tp", "theta", "kxt_shift")
             shape = tuple(len(coords[d]) for d in dims)
@@ -97,6 +117,11 @@ def make_dataset(
                 ("free_energy", u - s),
             ):
                 data[f"{stem}_transfer_{field}_trapped_passing"] = (dims, values)
+            if split:
+                data[f"fluctuation_energy_flr_transfer_{field}_trapped_passing"] = (
+                    dims,
+                    rng.normal(size=shape),
+                )
 
     if kinetic:
         for reduction in reductions:

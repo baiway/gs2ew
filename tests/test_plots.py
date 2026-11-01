@@ -34,6 +34,7 @@ class TestTransferTheta:
         {"show_std": True, "window": 30.0},
         {"normalise": True},
         {"quantities": ["U"]},
+        {"quantities": ["U", "U_field", "U_flr"]},
         {"fields": ["apar"]},
         {"include_kinetic": False},
     ])
@@ -90,6 +91,11 @@ class TestTrappedPassing:
     def test_spectral_view(self, ds, tmp_path):
         assert transfer_tp.plot_transfer_trapped_passing_spectral(
             ds, quantity="H", field="apar", output_dir=tmp_path, quiet=True
+        ).exists()
+
+    def test_flr_part(self, ds, tmp_path):
+        assert transfer_tp.plot_transfer_trapped_passing_spectral(
+            ds, quantity="U_flr", output_dir=tmp_path, quiet=True
         ).exists()
 
     def test_missing_diagnostic_is_explained(self, tmp_path):

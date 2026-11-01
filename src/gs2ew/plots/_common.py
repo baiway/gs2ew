@@ -15,18 +15,22 @@ from gs2ew.catalog import Drive
 #: Fixed colour per transferred quantity, from the Okabe-Ito colourblind-safe
 #: palette. Assigned by quantity rather than taken from a cycler, so U is the
 #: same blue whether or not H and S happen to be present in a given run.
-#: Checked for CVD separation against a light surface (worst adjacent pair
-#: dE 11.0 deutan, 25.4 normal).
+#: U, H, S and KE were checked for CVD separation against a light surface
+#: (worst adjacent pair dE 11.0 deutan, 25.4 normal). The two parts of the U
+#: split were added later and were not part of that check; they are also drawn
+#: dotted, so they never rely on hue alone.
 QUANTITY_COLOURS: dict[str, str] = {
-    "U": "#0072B2",   # blue
-    "H": "#D55E00",   # vermillion
-    "S": "#009E73",   # bluish green
-    "KE": "#CC79A7",  # reddish purple
+    "U": "#0072B2",        # blue
+    "H": "#D55E00",        # vermillion
+    "S": "#009E73",        # bluish green
+    "KE": "#CC79A7",       # reddish purple
+    "U_field": "#56B4E9",  # sky blue
+    "U_flr": "#E69F00",    # orange
 }
 
-#: The kinetic-energy transfer is drawn dashed so it is distinguishable from
-#: the field-mediated drives by more than colour alone.
-QUANTITY_LINESTYLES: dict[str, str] = {"KE": "--"}
+#: The kinetic-energy transfer is drawn dashed and the parts of the U split
+#: dotted, so they are distinguishable from H, S and U by more than colour.
+QUANTITY_LINESTYLES: dict[str, str] = {"KE": "--", "U_field": ":", "U_flr": ":"}
 
 
 def drive_colour(drive: Drive) -> str:
