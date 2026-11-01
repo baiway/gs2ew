@@ -9,7 +9,7 @@ For the standard plot set with no editing, use the CLI instead:
     uv run gs2ew plot results.out.nc -o outputs/ --movies
 
 Each plot also writes its data and provenance as a .nc bundle next to the
-figure (pass save_data=False to skip it); see the README.
+figure (pass save_data=False to skip it); see docs/reproducibility.md.
 """
 
 import argparse
