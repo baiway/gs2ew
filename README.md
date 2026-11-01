@@ -31,13 +31,15 @@ uv run gs2ew plot RUN     # the standard plot set, in RUN/gs2ew/
 `RUN` is a run directory holding one `*.out.nc`, or the `*.out.nc` itself. For
 plots tailored to a run, copy the template deck in
 [`examples/analysis.py`](examples/analysis.py) and comment in or out the plots
-you want. Each figure is saved with the data it was drawn from and the
-versions of GS2 and gs2ew that made it, so it can be redrawn or reproduced
-later.
+you want. Each figure is saved as a PDF and a PNG at the size it will be
+printed, with the data it was drawn from and the versions of GS2 and gs2ew that
+made it, so it can be restyled, redrawn or reproduced later.
 
 ## Documentation
 
 - [Usage](docs/usage.md): the command line, the Python API and time windows
+- [Figures](docs/figures.md): formats, the print style, and restyling a figure
+  for a thesis or journal
 - [Plot data and provenance](docs/reproducibility.md): what is saved with each
   figure, and `replot` / `reproduce`
 - [Transfer diagnostics](docs/transfer-diagnostics.md): what GS2 writes, and
