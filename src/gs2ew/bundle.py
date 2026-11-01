@@ -379,6 +379,35 @@ def reduced_data(bundle: xr.Dataset) -> xr.Dataset:
     )
 
 
+def data_differences(a: str | Path, b: str | Path) -> dict[str, float]:
+    """Max absolute difference of each variable that differs between bundles.
+
+    Compares the reduced data and coordinates of the bundles at `a` and `b`,
+    ignoring attributes and the input decks. A variable present in only one,
+    or with a different shape, differs by infinity. An empty result means the
+    data are identical, NaNs included.
+    """
+    data_a, data_b = reduced_data(read_bundle(a)), reduced_data(read_bundle(b))
+    differences = {}
+    for name in sorted(set(data_a.variables) | set(data_b.variables)):
+        if name not in data_a.variables or name not in data_b.variables:
+            differences[name] = float("inf")
+            continue
+        va, vb = data_a[name].values, data_b[name].values
+        if va.shape != vb.shape:
+            differences[name] = float("inf")
+        elif va.dtype.kind in "fc" or vb.dtype.kind in "fc":
+            if not np.array_equal(va, vb, equal_nan=True):
+                # NaNs in different places are a difference no number measures.
+                same_nans = np.array_equal(np.isnan(va), np.isnan(vb))
+                differences[name] = (
+                    float(np.nanmax(np.abs(va - vb))) if same_nans else float("inf")
+                )
+        elif not np.array_equal(va, vb):
+            differences[name] = float("inf")
+    return differences
+
+
 # --- Using bundles ------------------------------------------------------------
 
 
@@ -612,6 +641,7 @@ __all__ = [
     "PLOTS",
     "PlotSpec",
     "SourceMismatchError",
+    "data_differences",
     "get_spec",
     "make_plot",
     "provenance_attrs",

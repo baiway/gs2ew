@@ -63,6 +63,32 @@ class TimeWindow:
             return None
         return da.sel(t=slice(self.tstart, self.tend)).std(dim="t")
 
+    def attrs(self) -> dict[str, float | bool]:
+        """The window as attributes, for the reduced data of a plot."""
+        return {"tstart": self.tstart, "tend": self.tend, "averaging": self.averaging}
+
+    @classmethod
+    def from_attrs(cls, attrs: dict) -> TimeWindow:
+        """Rebuild a window from :meth:`attrs`, as read back from a bundle.
+
+        netCDF has no boolean type, so `averaging` may come back as
+        ``"true"``/``"false"``.
+        """
+        averaging = attrs["averaging"]
+        if isinstance(averaging, str):
+            averaging = averaging == "true"
+        tstart, tend = float(attrs["tstart"]), float(attrs["tend"])
+        return cls(
+            tstart=tstart,
+            tend=tend,
+            averaging=bool(averaging),
+            title=_window_title(tstart, tend) if averaging else None,
+        )
+
+
+def _window_title(tstart: float, tend: float) -> str:
+    return f"Averaged over t = [{tstart:.1f}, {tend:.1f}]"
+
 
 def resolve_saturation_start(
     ds: xr.Dataset,
@@ -144,7 +170,7 @@ def resolve_window(
         tstart=float(tstart),
         tend=float(tend),
         averaging=True,
-        title=f"Averaged over t = [{tstart:.1f}, {tend:.1f}]",
+        title=_window_title(tstart, tend),
     )
 
 

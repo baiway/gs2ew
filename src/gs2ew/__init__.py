@@ -27,10 +27,12 @@ from gs2ew.io import RunFiles, detect_saturation_time, find_run, load_gs2_output
 from gs2ew.metadata import get_metadata, get_version, requires_version
 from gs2ew.provenance import CodeVersion, gs2_version, gs2ew_version
 from gs2ew.plots.fields import (
+    compute_fields_by_mode,
     plot_fields_by_mode,
     plot_fields_time_traces,
     plot_phi2_by_theta,
     plot_phi2_by_theta_movie,
+    render_fields_by_mode,
 )
 from gs2ew.plots.transfer_spectral import (
     plot_transfer_spectral,
@@ -38,7 +40,12 @@ from gs2ew.plots.transfer_spectral import (
     plot_transfer_spectrum,
 )
 from gs2ew.plots.transfer_summary import plot_transfer_summary
-from gs2ew.plots.transfer_theta import plot_transfer_theta, plot_transfer_theta_movie
+from gs2ew.plots.transfer_theta import (
+    compute_transfer_theta,
+    plot_transfer_theta,
+    plot_transfer_theta_movie,
+    render_transfer_theta,
+)
 from gs2ew.plots.transfer_time import plot_transfer_butterfly, plot_transfer_hovmoller
 from gs2ew.plots.transfer_tp import (
     plot_transfer_trapped_passing,
@@ -72,11 +79,14 @@ __all__ = [
     "resolve_window",
     "theta_integral",
     # Fields
+    "compute_fields_by_mode",
     "plot_fields_by_mode",
     "plot_fields_time_traces",
     "plot_phi2_by_theta",
     "plot_phi2_by_theta_movie",
+    "render_fields_by_mode",
     # Transfer
+    "compute_transfer_theta",
     "plot_transfer_butterfly",
     "plot_transfer_hovmoller",
     "plot_transfer_spectral",
@@ -89,6 +99,7 @@ __all__ = [
     "plot_transfer_trapped_passing_movie",
     "plot_transfer_trapped_passing_spectral",
     "plot_transfer_trapped_passing_spectral_movie",
+    "render_transfer_theta",
     # Weights
     "plot_weights",
     "plot_wl_by_lambda",

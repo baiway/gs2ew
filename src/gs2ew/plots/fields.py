@@ -3,12 +3,19 @@
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from pathlib import Path
 
+from gs2ew.bundle import PlotSpec, make_plot, register
 from gs2ew.io import detect_saturation_time
 from gs2ew.movie import render_movie
 from gs2ew.plots import _common as common
-from gs2ew.timebase import DEFAULT_SATURATION_PAD, frame_indices, resolve_window
+from gs2ew.timebase import (
+    DEFAULT_SATURATION_PAD,
+    TimeWindow,
+    frame_indices,
+    resolve_window,
+)
 
 
 def plot_fields_time_traces(
@@ -307,12 +314,97 @@ def plot_phi2_by_theta_movie(
     )
 
 
+# (field prefix, label) for each field whose spectra may be present.
+_SPECTRUM_FIELDS = [
+    ("phi", r"$|\phi|^2$"),
+    ("apar", r"$|A_\parallel|^2$"),
+    ("bpar", r"$|B_\parallel|^2$"),
+]
+
+
+def compute_fields_by_mode(
+    ds: xr.Dataset,
+    window: float | None = None,
+    tstart: float | str | None = None,
+    saturation_pad: float = DEFAULT_SATURATION_PAD,
+    quiet: bool = False,
+) -> xr.Dataset:
+    """The spectra :func:`plot_fields_by_mode` draws.
+
+    GS2's ``<field>2_by_kx`` and ``<field>2_by_ky`` for each field that has
+    both, at the last timestep or averaged over a window, with ``kx`` sorted
+    out of FFT order.
+
+    Raises
+    ------
+    ValueError
+        If no field has both spectra.
+    """
+    fields = [
+        f for f, _ in _SPECTRUM_FIELDS
+        if f"{f}2_by_kx" in ds and f"{f}2_by_ky" in ds
+    ]
+    if not fields:
+        raise ValueError(
+            "No field spectra found: expected '<field>2_by_kx' and "
+            "'<field>2_by_ky' for at least one of phi/apar/bpar."
+        )
+
+    tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
+    reduced = xr.Dataset(attrs=tw.attrs())
+    for field in fields:
+        for name in (f"{field}2_by_kx", f"{field}2_by_ky"):
+            reduced[name] = common.time_mean(tw, ds[name])
+    # kx is stored in FFT layout; sort to a monotonic axis for a clean line
+    # plot. ky is already monotonic and non-negative.
+    return reduced.sortby("kx")
+
+
+def render_fields_by_mode(reduced: xr.Dataset) -> Figure:
+    """Draw the spectra from :func:`compute_fields_by_mode`."""
+    fields = [
+        (f, lab) for f, lab in _SPECTRUM_FIELDS if f"{f}2_by_kx" in reduced
+    ]
+    kx = reduced["kx"].values
+    ky = reduced["ky"].values
+
+    n_cols = len(fields)
+    fig, axes = plt.subplots(
+        2, n_cols, figsize=(4.5 * n_cols, 7.0), squeeze=False
+    )
+
+    for col, (field, lab) in enumerate(fields):
+        ax_kx, ax_ky = axes[0, col], axes[1, col]
+        ax_kx.semilogy(kx, reduced[f"{field}2_by_kx"].values, marker=".", ms=4, lw=1.3)
+        ax_ky.semilogy(ky, reduced[f"{field}2_by_ky"].values, marker=".", ms=4, lw=1.3)
+
+        ax_kx.set_title(lab)
+        ax_kx.set_xlabel(r"$k_x \rho_\text{ref}$")
+        ax_ky.set_xlabel(r"$k_y \rho_\text{ref}$")
+        for ax in (ax_kx, ax_ky):
+            ax.grid(alpha=0.3, which="both")
+
+    axes[0, 0].set_ylabel("spectral power")
+    axes[1, 0].set_ylabel("spectral power")
+
+    title = TimeWindow.from_attrs(reduced.attrs).title
+    if title is not None:
+        fig.suptitle(title)
+    plt.tight_layout()
+    return fig
+
+
 def plot_fields_by_mode(
     ds: xr.Dataset,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
+    window: float | None = None,
+    tstart: float | str | None = None,
+    saturation_pad: float = DEFAULT_SATURATION_PAD,
+    save_data: bool = True,
+    quiet: bool = False,
 ) -> Path:
-    """Plot the kx and ky spectra of each available field at the last time step.
+    """Plot the kx and ky spectra of each available field.
 
     Each enabled field (phi, apar, bpar) gets one column of two panels: the top
     shows the spectrum against ``kx`` (summed over ``ky``) and the bottom against
@@ -330,66 +422,40 @@ def plot_fields_by_mode(
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is "outputs".
     filename : str, optional
-        Filename for the plot. If None, uses "fields_by_mode.png".
+        Filename for the plot. If None, uses "fields_by_mode.png" (or
+        "fields_by_mode_averaged.png" when averaging).
+    window, tstart, saturation_pad : optional
+        The time window, as for every other plot; see :mod:`gs2ew.timebase`.
+        By default the last timestep is plotted.
+    save_data : bool, optional
+        Write the plotted data and its provenance alongside the figure; see
+        :mod:`gs2ew.bundle`. Default True.
+    quiet : bool, optional
+        Suppress the "Saved ..." message. Default False.
 
     Returns
     -------
     Path
         Path to the saved figure file
     """
-    # (field prefix, label); kept only if both 1D spectra are present.
-    candidates = [
-        ("phi", r"$|\phi|^2$"),
-        ("apar", r"$|A_\parallel|^2$"),
-        ("bpar", r"$|B_\parallel|^2$"),
-    ]
-    fields = [
-        (f, lab) for f, lab in candidates
-        if f"{f}2_by_kx" in ds and f"{f}2_by_ky" in ds
-    ]
-    if not fields:
-        raise ValueError(
-            "No field spectra found: expected '<field>2_by_kx' and "
-            "'<field>2_by_ky' for at least one of phi/apar/bpar."
-        )
-
-    # Create output directory if it doesn't exist
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Set default filename
-    if filename is None:
-        filename = "fields_by_mode.png"
-
-    # kx is stored in FFT layout; sort to a monotonic axis for a clean line
-    # plot. ky is already monotonic and non-negative.
-    kx = ds["kx"].values
-    kx_order = np.argsort(kx)
-    kx_sorted = kx[kx_order]
-    ky = ds["ky"].values
-
-    n_cols = len(fields)
-    fig, axes = plt.subplots(
-        2, n_cols, figsize=(4.5 * n_cols, 7.0), squeeze=False
+    return make_plot(
+        "fields_by_mode",
+        ds,
+        dict(window=window, tstart=tstart, saturation_pad=saturation_pad),
+        output_dir=output_dir,
+        filename=filename,
+        save_data=save_data,
+        quiet=quiet,
     )
 
-    for col, (field, lab) in enumerate(fields):
-        kx_spec = ds[f"{field}2_by_kx"].isel(t=-1).values[kx_order]
-        ky_spec = ds[f"{field}2_by_ky"].isel(t=-1).values
 
-        ax_kx, ax_ky = axes[0, col], axes[1, col]
-        ax_kx.semilogy(kx_sorted, kx_spec, marker=".", ms=4, lw=1.3)
-        ax_ky.semilogy(ky, ky_spec, marker=".", ms=4, lw=1.3)
-
-        ax_kx.set_title(lab)
-        ax_kx.set_xlabel(r"$k_x \rho_\text{ref}$")
-        ax_ky.set_xlabel(r"$k_y \rho_\text{ref}$")
-        for ax in (ax_kx, ax_ky):
-            ax.grid(alpha=0.3, which="both")
-
-    axes[0, 0].set_ylabel("spectral power")
-    axes[1, 0].set_ylabel("spectral power")
-
-    plt.tight_layout()
-
-    return common.save_figure(fig, output_dir, filename)
+register(
+    PlotSpec(
+        "fields_by_mode",
+        compute_fields_by_mode,
+        render_fields_by_mode,
+        lambda reduced: common.default_filename(
+            "fields_by_mode", TimeWindow.from_attrs(reduced.attrs).averaging
+        ),
+    )
+)

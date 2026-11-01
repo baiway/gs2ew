@@ -113,6 +113,9 @@ def make_dataset(
         "kys_ext": np.linspace(-1.0, 1.0, nk),
         "tp": np.array([1, 2]),
         "species": np.arange(nspec, dtype=float),
+        # GS2 stores kx in FFT order: zero, the positive modes, the negative.
+        "kx": np.array([0.0, 0.1, 0.2, -0.2, -0.1]),
+        "ky": np.array([0.0, 0.1, 0.2, 0.3]),
     }
 
     data: dict[str, xr.DataArray] = {
@@ -128,6 +131,13 @@ def make_dataset(
         return rng.normal(size=(nt, ntheta, nk))
 
     for field in fields:
+        for k in ("kx", "ky"):
+            data[f"{field}2_by_{k}"] = (
+                ("t", k),
+                rng.uniform(1.0, 2.0, size=(nt, len(coords[k]))),
+                {"long_name": f"|{field}|^2 summed over the other k", "units": "GS2 units"},
+            )
+
         for reduction in reductions:
             _, dim = catalog.REDUCTIONS[reduction]
             dims = ("t", "theta") if dim is None else ("t", "theta", dim)
@@ -140,7 +150,11 @@ def make_dataset(
                 ("free_energy", u - s),
             ):
                 suffix, _ = catalog.REDUCTIONS[reduction]
-                data[f"{stem}_transfer_{field}_theta{suffix}"] = (dims, values)
+                data[f"{stem}_transfer_{field}_theta{suffix}"] = (
+                    dims,
+                    values,
+                    {"units": "GS2 units (to be specified)"},
+                )
 
             if split:
                 u_field = rng.normal(size=u.shape)
