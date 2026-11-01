@@ -37,8 +37,9 @@ gs2ew batch "${PROJECT_ROOT}" \
     --klim 0.6
 ```
 
-Outputs land under `<output_root>/<case>`, mirroring each run's path relative
-to the project root, so runs that share an input-file name do not collide.
+With `-o`, outputs land under `<output_root>/<case>`, mirroring each run's path
+relative to the project root, so runs that share an input-file name do not
+collide. Without it, each run's plots go in a `gs2ew/` directory beside it.
 The CLI selects a headless matplotlib backend for you.
 """
 

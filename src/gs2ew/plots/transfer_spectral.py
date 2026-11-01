@@ -25,13 +25,15 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
+from matplotlib.figure import Figure
 
 from gs2ew import catalog
+from gs2ew.bundle import PlotSpec, make_plot, register
 from gs2ew.catalog import Drive
 from gs2ew.geometry import theta_integral
 from gs2ew.movie import render_movie
 from gs2ew.plots import _common as common
-from gs2ew.timebase import DEFAULT_SATURATION_PAD, frame_indices, resolve_window
+from gs2ew.timebase import DEFAULT_SATURATION_PAD, TimeWindow, frame_indices, resolve_window
 
 
 def _spectral_dim(reduction: str) -> str:
@@ -51,6 +53,82 @@ def _spectral_dim(reduction: str) -> str:
     return dim
 
 
+def _clip(da: xr.DataArray, dim: str, klim: float | None) -> xr.DataArray:
+    """`da` restricted to ``[-klim, klim]`` along `dim`, if `klim` is given."""
+    return da.sel({dim: slice(-klim, klim)}) if klim is not None else da
+
+
+def compute_transfer_spectral(
+    ds: xr.Dataset,
+    reduction: str = "kxtarget",
+    window: float | None = None,
+    tstart: float | str | None = None,
+    saturation_pad: float = DEFAULT_SATURATION_PAD,
+    quantities: list[str] | None = None,
+    fields: list[str] | None = None,
+    include_kinetic: bool = True,
+    quiet: bool = False,
+) -> xr.Dataset:
+    r"""The :math:`(\theta, k)` planes :func:`plot_transfer_spectral` draws.
+
+    One variable per drive over the full wavevector range, averaged over the
+    window (or at the last timestep). `klim` is applied when rendering.
+    """
+    dim = _spectral_dim(reduction)
+    tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
+
+    drives = catalog.available_drives(
+        ds, reduction, quantities, fields, include_kinetic
+    )
+    if not drives:
+        raise ValueError(f"No '{reduction}' transfer diagnostics found in dataset.")
+
+    reduced = xr.Dataset(attrs={**tw.attrs(), "reduction": reduction})
+    for drive in drives:
+        name = drive.varname(reduction)
+        reduced[name] = common.time_mean(tw, catalog.load(ds, drive, reduction))
+        reduced[name].attrs.update(common.drive_attrs(drive))
+    return reduced
+
+
+def render_transfer_spectral(
+    reduced: xr.Dataset,
+    klim: float | None = None,
+    vmax: float | None = None,
+) -> Figure:
+    """Draw the planes from :func:`compute_transfer_spectral`.
+
+    `klim` clips the wavevector axis to ``[-klim, klim]``; `vmax` fixes the
+    symmetric colour limit.
+    """
+    tw = TimeWindow.from_attrs(reduced.attrs)
+    dim = _spectral_dim(reduced.attrs["reduction"])
+
+    # Reduce every drive up front so the colour limits can be fixed before
+    # anything is drawn.
+    panels: dict[Drive, np.ndarray] = {}
+    k_values: np.ndarray | None = None
+    for name, drive in common.drives_in(reduced):
+        da = _clip(reduced[name], dim, klim)
+        if k_values is None:
+            k_values = np.asarray(da[dim].values)
+        # Panels are drawn as (theta, k), so transpose out of the stored
+        # (k, theta) ordering that xarray hands back.
+        panels[drive] = np.asarray(da.transpose("theta", dim).values)
+
+    fig = common.heatmap_grid(
+        panels,
+        x=k_values,
+        y=reduced["theta"].values,
+        xlabel=catalog.K_LABELS[dim],
+        ylabel=r"$\theta$",
+        vmax=vmax,
+    )
+
+    if tw.title is not None:
+        fig.suptitle(tw.title)
+    return fig
+
 
 def plot_transfer_spectral(
     ds: xr.Dataset,
@@ -66,6 +144,7 @@ def plot_transfer_spectral(
     klim: float | None = None,
     vmax: float | None = None,
     tight_bbox: bool = True,
+    save_data: bool = True,
     quiet: bool = False,
 ) -> Path:
     r"""Heatmaps of :math:`N_\mathbf{k}^{Q,f}(\theta, k)` for one `reduction`.
@@ -83,7 +162,8 @@ def plot_transfer_spectral(
         One of ``"kxtarget"`` (default), ``"kxsource"`` or ``"kysource"``.
     klim : float, optional
         Clip the wavevector axis to ``[-klim, klim]``. The spectra are usually
-        concentrated near k = 0, so this is often worth setting.
+        concentrated near k = 0, so this is often worth setting. The saved
+        data keeps the full range.
     vmax : float, optional
         Fixed symmetric colour limit. Movie frames pass this so the colour
         scale does not shift between frames; otherwise each row picks its own.
@@ -95,89 +175,40 @@ def plot_transfer_spectral(
     Path
         Path to the saved figure.
     """
-    dim = _spectral_dim(reduction)
-    tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
-
-    drives = catalog.available_drives(
-        ds, reduction, quantities, fields, include_kinetic
-    )
-    if not drives:
-        raise ValueError(f"No '{reduction}' transfer diagnostics found in dataset.")
-
-    theta = ds["theta"].values
-
-    if filename is None:
-        filename = common.default_filename(
-            f"transfer_spectral_{reduction}", tw.averaging
-        )
-
-    # Reduce every drive up front so the colour limits can be fixed before
-    # anything is drawn.
-    panels: dict[Drive, np.ndarray] = {}
-    k_values: np.ndarray | None = None
-    for drive in drives:
-        da = tw.mean(catalog.load(ds, drive, reduction))
-        if klim is not None:
-            da = da.sel({dim: slice(-klim, klim)})
-        if k_values is None:
-            k_values = np.asarray(da[dim].values)
-        # Panels are drawn as (theta, k), so transpose out of the stored
-        # (k, theta) ordering that xarray hands back.
-        panels[drive] = np.asarray(da.transpose("theta", dim).values)
-
-    fig = common.heatmap_grid(
-        panels,
-        x=k_values,
-        y=theta,
-        xlabel=catalog.K_LABELS[dim],
-        ylabel=r"$\theta$",
-        vmax=vmax,
-    )
-
-    if tw.title is not None:
-        fig.suptitle(tw.title)
-
-    return common.save_figure(
-        fig, output_dir, filename, tight_bbox=tight_bbox, quiet=quiet
+    return make_plot(
+        "transfer_spectral",
+        ds,
+        dict(
+            reduction=reduction,
+            window=window,
+            tstart=tstart,
+            saturation_pad=saturation_pad,
+            quantities=quantities,
+            fields=fields,
+            include_kinetic=include_kinetic,
+        ),
+        dict(klim=klim, vmax=vmax),
+        output_dir=output_dir,
+        filename=filename,
+        tight_bbox=tight_bbox,
+        save_data=save_data,
+        quiet=quiet,
     )
 
 
-def plot_transfer_spectrum(
+def compute_transfer_spectrum(
     ds: xr.Dataset,
     reduction: str = "kxtarget",
     window: float | None = None,
     tstart: float | str | None = None,
     saturation_pad: float = DEFAULT_SATURATION_PAD,
-    output_dir: str | Path = "outputs",
-    filename: str | None = None,
     jacobian: bool = True,
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
     include_kinetic: bool = True,
-    klim: float | None = None,
-    ylim: tuple[float, float] | None = None,
-    tight_bbox: bool = True,
     quiet: bool = False,
-) -> Path:
-    r"""1D spectrum :math:`\int \mathrm{d}\theta\, J\, N_\mathbf{k}^{Q,f}(\theta, k)`.
-
-    The poloidal structure is integrated out with the flux-surface Jacobian,
-    leaving the net transfer as a function of the triad wavevector. Faceted one
-    column per mediator field, matching :func:`plot_transfer_theta`.
-
-    Parameters
-    ----------
-    jacobian : bool, optional
-        Weight the theta integral by `jacob`. Default True. Set False to
-        integrate the bare profile instead.
-
-    Other parameters are as :func:`plot_transfer_spectral`.
-
-    Returns
-    -------
-    Path
-        Path to the saved figure.
-    """
+) -> xr.Dataset:
+    """The theta-integrated spectra :func:`plot_transfer_spectrum` draws."""
     dim = _spectral_dim(reduction)
     tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
 
@@ -187,12 +218,30 @@ def plot_transfer_spectrum(
     if not drives:
         raise ValueError(f"No '{reduction}' transfer diagnostics found in dataset.")
 
-    columns = catalog.field_columns(drives)
-
-    if filename is None:
-        filename = common.default_filename(
-            f"transfer_spectrum_{reduction}", tw.averaging
+    reduced = xr.Dataset(attrs={**tw.attrs(), "reduction": reduction})
+    for drive in drives:
+        da = catalog.load(ds, drive, reduction)
+        spectrum = theta_integral(common.time_mean(tw, da), ds, jacobian=jacobian)
+        spectrum.attrs = common.derived_attrs(
+            da,
+            common.theta_integral_note(jacobian),
+            "t: mean" if tw.averaging else None,
         )
+        spectrum.attrs.update(common.drive_attrs(drive))
+        reduced[drive.varname(reduction)] = spectrum
+    return reduced
+
+
+def render_transfer_spectrum(
+    reduced: xr.Dataset,
+    klim: float | None = None,
+    ylim: tuple[float, float] | None = None,
+) -> Figure:
+    """Draw the spectra from :func:`compute_transfer_spectrum`."""
+    tw = TimeWindow.from_attrs(reduced.attrs)
+    dim = _spectral_dim(reduced.attrs["reduction"])
+    names = {drive: name for name, drive in common.drives_in(reduced)}
+    columns = catalog.field_columns(list(names))
 
     fig, axes = plt.subplots(
         1, len(columns), figsize=(5 * len(columns), 4.5), sharey=True, squeeze=False
@@ -200,10 +249,7 @@ def plot_transfer_spectrum(
 
     for ax, (field, col_drives) in zip(axes[0], columns):
         for drive in col_drives:
-            da = catalog.load(ds, drive, reduction)
-            spectrum = theta_integral(tw.mean(da), ds, jacobian=jacobian)
-            if klim is not None:
-                spectrum = spectrum.sel({dim: slice(-klim, klim)})
+            spectrum = _clip(reduced[names[drive]], dim, klim)
             ax.plot(
                 np.asarray(spectrum[dim].values),
                 np.asarray(spectrum.values),
@@ -232,9 +278,65 @@ def plot_transfer_spectrum(
     if tw.title is not None:
         fig.suptitle(tw.title)
     fig.tight_layout()
+    return fig
 
-    return common.save_figure(
-        fig, output_dir, filename, tight_bbox=tight_bbox, quiet=quiet
+
+def plot_transfer_spectrum(
+    ds: xr.Dataset,
+    reduction: str = "kxtarget",
+    window: float | None = None,
+    tstart: float | str | None = None,
+    saturation_pad: float = DEFAULT_SATURATION_PAD,
+    output_dir: str | Path = "outputs",
+    filename: str | None = None,
+    jacobian: bool = True,
+    quantities: list[str] | None = None,
+    fields: list[str] | None = None,
+    include_kinetic: bool = True,
+    klim: float | None = None,
+    ylim: tuple[float, float] | None = None,
+    tight_bbox: bool = True,
+    save_data: bool = True,
+    quiet: bool = False,
+) -> Path:
+    r"""1D spectrum :math:`\int \mathrm{d}\theta\, J\, N_\mathbf{k}^{Q,f}(\theta, k)`.
+
+    The poloidal structure is integrated out with the flux-surface Jacobian,
+    leaving the net transfer as a function of the triad wavevector. Faceted one
+    column per mediator field, matching :func:`plot_transfer_theta`.
+
+    Parameters
+    ----------
+    jacobian : bool, optional
+        Weight the theta integral by `jacob`. Default True. Set False to
+        integrate the bare profile instead.
+
+    Other parameters are as :func:`plot_transfer_spectral`.
+
+    Returns
+    -------
+    Path
+        Path to the saved figure.
+    """
+    return make_plot(
+        "transfer_spectrum",
+        ds,
+        dict(
+            reduction=reduction,
+            window=window,
+            tstart=tstart,
+            saturation_pad=saturation_pad,
+            jacobian=jacobian,
+            quantities=quantities,
+            fields=fields,
+            include_kinetic=include_kinetic,
+        ),
+        dict(klim=klim, ylim=ylim),
+        output_dir=output_dir,
+        filename=filename,
+        tight_bbox=tight_bbox,
+        save_data=save_data,
+        quiet=quiet,
     )
 
 
@@ -300,6 +402,7 @@ def plot_transfer_spectral_movie(
             klim=klim,
             vmax=vmax,
             tight_bbox=False,
+            save_data=False,
             quiet=True,
         )
 
@@ -308,8 +411,38 @@ def plot_transfer_spectral_movie(
     )
 
 
+def _filename(stem: str):
+    """Default filename for a spectral plot, marking its reduction and window."""
+    return lambda reduced: common.default_filename(
+        f"{stem}_{reduced.attrs['reduction']}",
+        TimeWindow.from_attrs(reduced.attrs).averaging,
+    )
+
+
+register(
+    PlotSpec(
+        "transfer_spectral",
+        compute_transfer_spectral,
+        render_transfer_spectral,
+        _filename("transfer_spectral"),
+    )
+)
+register(
+    PlotSpec(
+        "transfer_spectrum",
+        compute_transfer_spectrum,
+        render_transfer_spectrum,
+        _filename("transfer_spectrum"),
+    )
+)
+
+
 __all__ = [
+    "compute_transfer_spectral",
+    "compute_transfer_spectrum",
     "plot_transfer_spectral",
     "plot_transfer_spectrum",
     "plot_transfer_spectral_movie",
+    "render_transfer_spectral",
+    "render_transfer_spectrum",
 ]

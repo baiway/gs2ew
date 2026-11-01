@@ -26,12 +26,14 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
+from matplotlib.figure import Figure
 
 from gs2ew import catalog
+from gs2ew.bundle import PlotSpec, make_plot, register
 from gs2ew.catalog import Drive
 from gs2ew.movie import render_movie
 from gs2ew.plots import _common as common
-from gs2ew.timebase import DEFAULT_SATURATION_PAD, frame_indices, resolve_window
+from gs2ew.timebase import DEFAULT_SATURATION_PAD, TimeWindow, frame_indices, resolve_window
 
 #: Passing particles solid, trapped dashed — a secondary encoding so the two
 #: populations are distinguishable without relying on colour.
@@ -39,57 +41,41 @@ TP_LINESTYLES: dict[int, str] = {1: "-", 2: "--"}
 
 
 def _tp_values(ds: xr.Dataset) -> list[int]:
-    """The `tp` coordinate values present, as plain ints."""
+    """The `tp` coordinate values in `ds` (GS2 output or reduced data), as ints."""
     return [int(v) for v in np.asarray(ds["tp"].values)]
 
 
-def plot_transfer_trapped_passing(
+_NO_TP_MESSAGE = (
+    "No trapped/passing transfer diagnostics found in dataset "
+    "(enable write_*_transfer_trapped_passing in GS2)."
+)
+
+
+def _species_coords(ds: xr.Dataset) -> dict[str, xr.DataArray]:
+    """What :func:`common.species_labels` needs to label the species."""
+    return {"type_of_species": ds["type_of_species"]} if "type_of_species" in ds else {}
+
+
+def norm_key(name: str, species_index: int, tp: int) -> str:
+    """Key of one curve's divisor in `norm_factors`, e.g. ``"<var>:0:2"``."""
+    return f"{name}:{species_index}:{tp}"
+
+
+def compute_transfer_trapped_passing(
     ds: xr.Dataset,
     window: float | None = None,
     tstart: float | str | None = None,
     saturation_pad: float = DEFAULT_SATURATION_PAD,
-    output_dir: str | Path = "outputs",
-    filename: str | None = None,
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
-    normalise: bool = False,
-    norm_factors: dict[tuple[Drive, int, int], float] | None = None,
     show_std: bool = False,
-    ylim: tuple[float, float] | None = None,
-    tight_bbox: bool = True,
     quiet: bool = False,
-) -> Path:
-    r"""Poloidal transfer from trapped and passing particles, per species.
+) -> xr.Dataset:
+    """The profiles :func:`plot_transfer_trapped_passing` draws.
 
-    Summed over :math:`k_{xt}`. Each panel is one species (columns) and one
-    mediator field (rows); within a panel, trapped and passing curves for the
-    same species share the axes so their shapes and magnitudes can be compared
-    directly. Colour identifies the transferred quantity, line style the
-    population.
-
-    Parameters
-    ----------
-    ds : xarray.Dataset
-        GS2 output dataset containing `*_trapped_passing` variables.
-    quantities : list of str, optional
-        Restrict to these quantities. Defaults to all present; pass
-        ``["U"]`` for an uncluttered two-curve-per-panel view.
-    normalise : bool, optional
-        Divide each curve by its peak absolute value. Default False.
-    norm_factors : dict, optional
-        Divisors keyed by ``(drive, species_index, tp)``, used instead of each
-        curve's own peak when `normalise` is True. The movie helper passes
-        movie-wide factors here.
-    show_std : bool, optional
-        Shade each curve with a +/-1 standard deviation band over the window.
-
-    Other parameters are as
-    :func:`gs2ew.plots.transfer_theta.plot_transfer_theta`.
-
-    Returns
-    -------
-    Path
-        Path to the saved figure.
+    One variable per drive over ``(species, tp, theta)``, summed over
+    :math:`k_{xt}` and averaged over the window (or at the last timestep).
+    With `show_std` and a window, each also gets a ``<name>_std``.
 
     Raises
     ------
@@ -102,18 +88,70 @@ def plot_transfer_trapped_passing(
         ds, "trapped_passing", quantities, fields, include_kinetic=False
     )
     if not drives:
-        raise ValueError(
-            "No trapped/passing transfer diagnostics found in dataset "
-            "(enable write_*_transfer_trapped_passing in GS2)."
-        )
+        raise ValueError(_NO_TP_MESSAGE)
 
-    field_rows = [f for f in catalog.FIELDS if any(d.field == f for d in drives)]
-    species = common.species_labels(ds)
+    n_species = int(ds.sizes["species"])
     tp_values = _tp_values(ds)
-    theta = ds["theta"].values
+    cell_methods = "t: mean kxt_shift: sum" if tw.averaging else "kxt_shift: sum"
+    reduced = xr.Dataset(attrs=tw.attrs())
 
-    if filename is None:
-        filename = common.default_filename("transfer_trapped_passing", tw.averaging)
+    for drive in drives:
+        source = catalog.load(ds, drive, "trapped_passing")
+        name = drive.varname("trapped_passing")
+        shape = (n_species, len(tp_values), int(ds.sizes["theta"]))
+        means = np.empty(shape)
+        stds = np.empty(shape) if (show_std and tw.averaging) else None
+        # One curve at a time, as drawn, rather than all at once.
+        for j in range(n_species):
+            da = source.isel(species=j).sum("kxt_shift")
+            for k, tp in enumerate(tp_values):
+                means[j, k] = np.asarray(tw.mean(da.sel(tp=tp)).values)
+                if stds is not None:
+                    stds[j, k] = np.asarray(tw.std(da.sel(tp=tp)).values)
+
+        dims = ("species", "tp", "theta")
+        reduced[name] = (
+            dims,
+            means,
+            {
+                **common.derived_attrs(source, "summed over kxt_shift", cell_methods),
+                **common.drive_attrs(drive),
+            },
+        )
+        if stds is not None:
+            reduced[f"{name}_std"] = (
+                dims,
+                stds,
+                common.derived_attrs(
+                    source,
+                    "summed over kxt_shift (standard deviation over t)",
+                    "t: standard_deviation kxt_shift: sum",
+                ),
+            )
+            reduced[name].attrs["ancillary_variables"] = f"{name}_std"
+
+    return reduced.assign_coords(
+        species=ds["species"], tp=ds["tp"], theta=ds["theta"], **_species_coords(ds)
+    )
+
+
+def render_transfer_trapped_passing(
+    reduced: xr.Dataset,
+    normalise: bool = False,
+    norm_factors: dict[str, float] | None = None,
+    ylim: tuple[float, float] | None = None,
+) -> Figure:
+    """Draw the profiles from :func:`compute_transfer_trapped_passing`.
+
+    `norm_factors` maps :func:`norm_key` keys to the divisors used in place
+    of each curve's own peak when `normalise` is True.
+    """
+    tw = TimeWindow.from_attrs(reduced.attrs)
+    drives = common.drives_in(reduced)
+    field_rows = [f for f in catalog.FIELDS if any(d.field == f for _, d in drives)]
+    species = common.species_labels(reduced)
+    tp_values = _tp_values(reduced)
+    theta = reduced["theta"].values
 
     fig, axes = plt.subplots(
         len(field_rows),
@@ -128,17 +166,17 @@ def plot_transfer_trapped_passing(
         for j, species_label in enumerate(species):
             ax = axes[i][j]
 
-            for drive in (d for d in drives if d.field == field):
-                da = catalog.load(ds, drive, "trapped_passing")
-                da = da.isel(species=j).sum("kxt_shift")
-
-                for tp in tp_values:
-                    values = np.asarray(tw.mean(da.sel(tp=tp)).values)
-                    std = tw.std(da.sel(tp=tp)) if (show_std and tw.averaging) else None
-                    std = np.asarray(std.values) if std is not None else None
+            for name, drive in ((n, d) for n, d in drives if d.field == field):
+                for k, tp in enumerate(tp_values):
+                    values = np.asarray(reduced[name].values[j, k])
+                    std = (
+                        np.asarray(reduced[f"{name}_std"].values[j, k])
+                        if f"{name}_std" in reduced
+                        else None
+                    )
 
                     if normalise:
-                        key = (drive, j, tp)
+                        key = norm_key(name, j, tp)
                         factor = (
                             norm_factors.get(key) if norm_factors is not None else None
                         )
@@ -202,9 +240,89 @@ def plot_transfer_trapped_passing(
     # Leave room at the bottom for the figure-level legend.
     legend_rows = -(-len(labels) // 3)
     fig.tight_layout(rect=(0, 0.04 + 0.035 * legend_rows, 1, 1))
+    return fig
 
-    return common.save_figure(
-        fig, output_dir, filename, tight_bbox=tight_bbox, quiet=quiet
+
+def plot_transfer_trapped_passing(
+    ds: xr.Dataset,
+    window: float | None = None,
+    tstart: float | str | None = None,
+    saturation_pad: float = DEFAULT_SATURATION_PAD,
+    output_dir: str | Path = "outputs",
+    filename: str | None = None,
+    quantities: list[str] | None = None,
+    fields: list[str] | None = None,
+    normalise: bool = False,
+    norm_factors: dict[tuple[Drive, int, int] | str, float] | None = None,
+    show_std: bool = False,
+    ylim: tuple[float, float] | None = None,
+    tight_bbox: bool = True,
+    save_data: bool = True,
+    quiet: bool = False,
+) -> Path:
+    r"""Poloidal transfer from trapped and passing particles, per species.
+
+    Summed over :math:`k_{xt}`. Each panel is one species (columns) and one
+    mediator field (rows); within a panel, trapped and passing curves for the
+    same species share the axes so their shapes and magnitudes can be compared
+    directly. Colour identifies the transferred quantity, line style the
+    population.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        GS2 output dataset containing `*_trapped_passing` variables.
+    quantities : list of str, optional
+        Restrict to these quantities. Defaults to all present; pass
+        ``["U"]`` for an uncluttered two-curve-per-panel view.
+    normalise : bool, optional
+        Divide each curve by its peak absolute value. Default False.
+    norm_factors : dict, optional
+        Divisors keyed by ``(drive, species_index, tp)`` (or the equivalent
+        :func:`norm_key`), used instead of each curve's own peak when
+        `normalise` is True. The movie helper passes movie-wide factors here.
+    show_std : bool, optional
+        Shade each curve with a +/-1 standard deviation band over the window.
+    save_data : bool, optional
+        Write the plotted data and its provenance alongside the figure; see
+        :mod:`gs2ew.bundle`. Default True.
+
+    Other parameters are as
+    :func:`gs2ew.plots.transfer_theta.plot_transfer_theta`.
+
+    Returns
+    -------
+    Path
+        Path to the saved figure.
+
+    Raises
+    ------
+    ValueError
+        If `ds` has no trapped/passing transfer diagnostics.
+    """
+    if norm_factors is not None:
+        norm_factors = {
+            key if isinstance(key, str)
+            else norm_key(key[0].varname("trapped_passing"), key[1], key[2]): value
+            for key, value in norm_factors.items()
+        }
+    return make_plot(
+        "transfer_trapped_passing",
+        ds,
+        dict(
+            window=window,
+            tstart=tstart,
+            saturation_pad=saturation_pad,
+            quantities=quantities,
+            fields=fields,
+            show_std=show_std,
+        ),
+        dict(normalise=normalise, norm_factors=norm_factors, ylim=ylim),
+        output_dir=output_dir,
+        filename=filename,
+        tight_bbox=tight_bbox,
+        save_data=save_data,
+        quiet=quiet,
     )
 
 
@@ -235,7 +353,7 @@ def plot_transfer_trapped_passing_movie(
         ds, "trapped_passing", quantities, fields, include_kinetic=False
     )
     if not drives:
-        raise ValueError("No trapped/passing transfer diagnostics found in dataset.")
+        raise ValueError(_NO_TP_MESSAGE)
 
     tp_values = _tp_values(ds)
     n_species = int(ds.sizes["species"])
@@ -281,6 +399,7 @@ def plot_transfer_trapped_passing_movie(
             norm_factors=norm_factors,
             ylim=ylim,
             tight_bbox=False,
+            save_data=False,
             quiet=True,
         )
 
@@ -289,61 +408,44 @@ def plot_transfer_trapped_passing_movie(
     )
 
 
-def plot_transfer_trapped_passing_spectral(
+def compute_transfer_trapped_passing_spectral(
     ds: xr.Dataset,
     quantity: str = "U",
     field: str = "phi",
     window: float | None = None,
     tstart: float | str | None = None,
     saturation_pad: float = DEFAULT_SATURATION_PAD,
-    output_dir: str | Path = "outputs",
-    filename: str | None = None,
-    klim: float | None = None,
-    vmax: float | None = None,
-    tight_bbox: bool = True,
     quiet: bool = False,
-) -> Path:
-    r"""Heatmaps of :math:`N_\mathbf{k}^{Q,f}(\theta, k_{xt})` per population.
-
-    Rows are passing and trapped, columns are species, for a single
-    (quantity, field) pair. All panels share one symmetric colour scale, so a
-    darker panel really does carry more transfer — which is the comparison this
-    plot exists to make.
-
-    Parameters
-    ----------
-    quantity : str, optional
-        Transferred quantity: ``"U"`` (default), ``"H"``, ``"S"`` or
-        ``"U_flr"``. (``"U_field"`` has no trapped/passing output.)
-    field : str, optional
-        Mediator field. Default ``"phi"``.
-    vmax : float, optional
-        Fixed symmetric colour limit; movie frames pass this.
-
-    Other parameters are as :func:`plot_transfer_trapped_passing`.
-
-    Returns
-    -------
-    Path
-        Path to the saved figure.
-    """
+) -> xr.Dataset:
+    r"""The :math:`(\theta, k_{xt})` planes
+    :func:`plot_transfer_trapped_passing_spectral` draws, per species and
+    population, over the full :math:`k_{xt}` range."""
     tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
 
     drive = Drive(quantity, field)
-    da = catalog.load(ds, drive, "trapped_passing")
-    da = tw.mean(da)
+    name = drive.varname("trapped_passing")
+    reduced = xr.Dataset(attrs=tw.attrs())
+    reduced[name] = common.time_mean(tw, catalog.load(ds, drive, "trapped_passing"))
+    reduced[name].attrs.update(common.drive_attrs(drive))
+    return reduced.assign_coords(**_species_coords(ds))
+
+
+def render_transfer_trapped_passing_spectral(
+    reduced: xr.Dataset,
+    klim: float | None = None,
+    vmax: float | None = None,
+) -> Figure:
+    """Draw the planes from :func:`compute_transfer_trapped_passing_spectral`."""
+    tw = TimeWindow.from_attrs(reduced.attrs)
+    [(name, drive)] = common.drives_in(reduced)
+    da = reduced[name]
     if klim is not None:
         da = da.sel(kxt_shift=slice(-klim, klim))
 
-    species = common.species_labels(ds)
-    tp_values = _tp_values(ds)
-    theta = ds["theta"].values
+    species = common.species_labels(reduced)
+    tp_values = _tp_values(reduced)
+    theta = reduced["theta"].values
     k_values = np.asarray(da["kxt_shift"].values)
-
-    if filename is None:
-        filename = common.default_filename(
-            f"transfer_tp_spectral_{quantity}_{field}", tw.averaging
-        )
 
     limit = vmax if vmax is not None else common.symmetric_limit(np.asarray(da.values))
 
@@ -386,9 +488,67 @@ def plot_transfer_trapped_passing_spectral(
     if tw.title is not None:
         title = f"{title} — {tw.title}"
     fig.suptitle(title)
+    return fig
 
-    return common.save_figure(
-        fig, output_dir, filename, tight_bbox=tight_bbox, quiet=quiet
+
+def plot_transfer_trapped_passing_spectral(
+    ds: xr.Dataset,
+    quantity: str = "U",
+    field: str = "phi",
+    window: float | None = None,
+    tstart: float | str | None = None,
+    saturation_pad: float = DEFAULT_SATURATION_PAD,
+    output_dir: str | Path = "outputs",
+    filename: str | None = None,
+    klim: float | None = None,
+    vmax: float | None = None,
+    tight_bbox: bool = True,
+    save_data: bool = True,
+    quiet: bool = False,
+) -> Path:
+    r"""Heatmaps of :math:`N_\mathbf{k}^{Q,f}(\theta, k_{xt})` per population.
+
+    Rows are passing and trapped, columns are species, for a single
+    (quantity, field) pair. All panels share one symmetric colour scale, so a
+    darker panel really does carry more transfer — which is the comparison this
+    plot exists to make.
+
+    Parameters
+    ----------
+    quantity : str, optional
+        Transferred quantity: ``"U"`` (default), ``"H"``, ``"S"`` or
+        ``"U_flr"``. (``"U_field"`` has no trapped/passing output.)
+    field : str, optional
+        Mediator field. Default ``"phi"``.
+    klim : float, optional
+        Clip the :math:`k_{xt}` axis to ``[-klim, klim]``. The saved data
+        keeps the full range.
+    vmax : float, optional
+        Fixed symmetric colour limit; movie frames pass this.
+
+    Other parameters are as :func:`plot_transfer_trapped_passing`.
+
+    Returns
+    -------
+    Path
+        Path to the saved figure.
+    """
+    return make_plot(
+        "transfer_trapped_passing_spectral",
+        ds,
+        dict(
+            quantity=quantity,
+            field=field,
+            window=window,
+            tstart=tstart,
+            saturation_pad=saturation_pad,
+        ),
+        dict(klim=klim, vmax=vmax),
+        output_dir=output_dir,
+        filename=filename,
+        tight_bbox=tight_bbox,
+        save_data=save_data,
+        quiet=quiet,
     )
 
 
@@ -434,6 +594,7 @@ def plot_transfer_trapped_passing_spectral_movie(
             klim=klim,
             vmax=vmax,
             tight_bbox=False,
+            save_data=False,
             quiet=True,
         )
 
@@ -442,10 +603,45 @@ def plot_transfer_trapped_passing_spectral_movie(
     )
 
 
+register(
+    PlotSpec(
+        "transfer_trapped_passing",
+        compute_transfer_trapped_passing,
+        render_transfer_trapped_passing,
+        lambda reduced: common.default_filename(
+            "transfer_trapped_passing", TimeWindow.from_attrs(reduced.attrs).averaging
+        ),
+    )
+)
+
+
+def _spectral_filename(reduced: xr.Dataset) -> str:
+    [(_, drive)] = common.drives_in(reduced)
+    return common.default_filename(
+        f"transfer_tp_spectral_{drive.quantity}_{drive.field}",
+        TimeWindow.from_attrs(reduced.attrs).averaging,
+    )
+
+
+register(
+    PlotSpec(
+        "transfer_trapped_passing_spectral",
+        compute_transfer_trapped_passing_spectral,
+        render_transfer_trapped_passing_spectral,
+        _spectral_filename,
+    )
+)
+
+
 __all__ = [
     "TP_LINESTYLES",
+    "compute_transfer_trapped_passing",
+    "compute_transfer_trapped_passing_spectral",
+    "norm_key",
     "plot_transfer_trapped_passing",
     "plot_transfer_trapped_passing_movie",
     "plot_transfer_trapped_passing_spectral",
     "plot_transfer_trapped_passing_spectral_movie",
+    "render_transfer_trapped_passing",
+    "render_transfer_trapped_passing_spectral",
 ]

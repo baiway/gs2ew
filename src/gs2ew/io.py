@@ -2,10 +2,77 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import xarray as xr
+
+
+#: Suffix of GS2's main output file.
+OUTPUT_SUFFIX = ".out.nc"
+
+
+@dataclass(frozen=True)
+class RunFiles:
+    """The files of one GS2 run.
+
+    `input_file` is the ``<name>.in`` next to the output, or None if there is
+    none. The deck embedded in the output is the authoritative copy; this one
+    is only checked against it.
+    """
+
+    run_dir: Path
+    out_nc: Path
+    input_file: Path | None
+
+    @property
+    def name(self) -> str:
+        """The run name: the output's filename without ``.out.nc``."""
+        return self.out_nc.name[: -len(OUTPUT_SUFFIX)]
+
+
+def find_run(path: str | Path) -> RunFiles:
+    """Locate a GS2 run from a run directory or its `.out.nc` file.
+
+    A directory must contain exactly one ``*.out.nc``; anything else is
+    ambiguous and raises rather than guessing.
+
+    Raises
+    ------
+    FileNotFoundError
+        If `path` does not exist, or is a directory with no ``*.out.nc``.
+    ValueError
+        If `path` is a directory with several ``*.out.nc`` files, or a file
+        that is not a ``.out.nc``.
+    """
+    path = Path(path).expanduser().resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"{path} does not exist.")
+
+    if path.is_dir():
+        candidates = sorted(path.glob(f"*{OUTPUT_SUFFIX}"))
+        if not candidates:
+            raise FileNotFoundError(f"No *{OUTPUT_SUFFIX} file in {path}.")
+        if len(candidates) > 1:
+            names = "\n".join(f"  {c.name}" for c in candidates)
+            raise ValueError(
+                f"{path} holds {len(candidates)} *{OUTPUT_SUFFIX} files; "
+                f"pass the one you mean:\n{names}"
+            )
+        out_nc = candidates[0]
+    elif path.name.endswith(OUTPUT_SUFFIX):
+        out_nc = path
+    else:
+        raise ValueError(f"{path} is neither a run directory nor a *{OUTPUT_SUFFIX} file.")
+
+    name = out_nc.name[: -len(OUTPUT_SUFFIX)]
+    input_file = out_nc.with_name(f"{name}.in")
+    return RunFiles(
+        run_dir=out_nc.parent,
+        out_nc=out_nc,
+        input_file=input_file if input_file.is_file() else None,
+    )
 
 
 def load_gs2_output(filepath: str | Path, chunks: dict | None = None) -> xr.Dataset:
@@ -91,4 +158,10 @@ def detect_saturation_time(
     return float(saturated[0]) if saturated.size else float("nan")
 
 
-__all__ = ["load_gs2_output", "detect_saturation_time"]
+__all__ = [
+    "OUTPUT_SUFFIX",
+    "RunFiles",
+    "find_run",
+    "load_gs2_output",
+    "detect_saturation_time",
+]

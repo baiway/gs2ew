@@ -11,6 +11,7 @@ from matplotlib.figure import Figure
 
 from gs2ew import catalog
 from gs2ew.catalog import Drive
+from gs2ew.timebase import TimeWindow
 
 #: Fixed colour per transferred quantity, from the Okabe-Ito colourblind-safe
 #: palette. Assigned by quantity rather than taken from a cycler, so U is the
@@ -74,6 +75,86 @@ def save_figure(
     if not quiet:
         print(f"Saved {output_path}")
     return output_path
+
+
+def time_mean(tw: TimeWindow, da: xr.DataArray) -> xr.DataArray:
+    """`tw`'s mean of `da`, keeping GS2's attributes and noting the average.
+
+    The average is recorded as CF ``cell_methods``. A single timestep's time
+    is left to the window attributes (:meth:`TimeWindow.attrs`): kept as a
+    scalar coordinate, xarray would tie it to every variable in a bundle,
+    input decks included.
+    """
+    out = tw.mean(da).drop_vars("t", errors="ignore")
+    out.attrs = dict(da.attrs)
+    if tw.averaging:
+        out.attrs["cell_methods"] = "t: mean"
+    return out
+
+
+def time_std(tw: TimeWindow, da: xr.DataArray) -> xr.DataArray | None:
+    """`tw`'s standard deviation of `da`, or None when not averaging."""
+    out = tw.std(da)
+    if out is None:
+        return None
+    out.attrs = {
+        key: da.attrs[key] for key in ("units", "long_name") if key in da.attrs
+    }
+    if "long_name" in out.attrs:
+        out.attrs["long_name"] += " (standard deviation over t)"
+    out.attrs["cell_methods"] = "t: standard_deviation"
+    return out
+
+
+def derived_attrs(
+    source: xr.DataArray,
+    note: str,
+    cell_methods: str | None = None,
+) -> dict[str, str]:
+    """Attributes for data derived from the GS2 variable `source`.
+
+    Keeps `source`'s ``units`` and appends `note` (e.g. "summed over
+    kxt_shift") to its ``long_name``, so the reduction is recorded alongside
+    the data.
+    """
+    attrs = {}
+    if "units" in source.attrs:
+        attrs["units"] = source.attrs["units"]
+    long_name = source.attrs.get("long_name", source.name)
+    attrs["long_name"] = f"{long_name}, {note}" if long_name else note
+    if cell_methods is not None:
+        attrs["cell_methods"] = cell_methods
+    return attrs
+
+
+def theta_integral_note(jacobian: bool) -> str:
+    """How a theta integral was weighted, for :func:`derived_attrs`."""
+    return (
+        "integrated over theta weighted by jacob"
+        if jacobian
+        else "integrated over theta, unweighted"
+    )
+
+
+def drive_attrs(drive: Drive) -> dict[str, str]:
+    """Attributes marking a reduced variable as `drive`'s data.
+
+    Stored with the reduced data so a renderer can recover the labels and
+    colours from a bundle alone. The kinetic-energy drive has no field.
+    """
+    attrs = {"quantity": drive.quantity}
+    if drive.field is not None:
+        attrs["field"] = drive.field
+    return attrs
+
+
+def drives_in(reduced: xr.Dataset) -> list[tuple[str, Drive]]:
+    """(variable name, drive) for every drive's data in `reduced`, in order."""
+    return [
+        (name, Drive(da.attrs["quantity"], da.attrs.get("field")))
+        for name, da in reduced.data_vars.items()
+        if "quantity" in da.attrs
+    ]
 
 
 def frame_values(
@@ -305,6 +386,12 @@ __all__ = [
     "drive_colour",
     "drive_linestyle",
     "save_figure",
+    "time_mean",
+    "time_std",
+    "derived_attrs",
+    "theta_integral_note",
+    "drive_attrs",
+    "drives_in",
     "frame_values",
     "padded_limits",
     "peak_factors",

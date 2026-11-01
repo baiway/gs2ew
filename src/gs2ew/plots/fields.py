@@ -3,12 +3,59 @@
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from pathlib import Path
 
+from gs2ew.bundle import PlotSpec, make_plot, register
 from gs2ew.io import detect_saturation_time
 from gs2ew.movie import render_movie
 from gs2ew.plots import _common as common
-from gs2ew.timebase import DEFAULT_SATURATION_PAD, frame_indices, resolve_window
+from gs2ew.timebase import (
+    DEFAULT_SATURATION_PAD,
+    TimeWindow,
+    frame_indices,
+    resolve_window,
+)
+
+
+def compute_fields_time_traces(
+    ds: xr.Dataset,
+    window: float = 20.0,
+    threshold: float = 0.1,
+    quiet: bool = False,
+) -> xr.Dataset:
+    """The traces :func:`plot_fields_time_traces` draws, with the detected
+    saturation time (NaN if none) as the ``tsat`` attribute."""
+    return xr.Dataset(
+        {f: ds[f] for f in ["phi2", "apar2", "bpar2"] if f in ds},
+        # Saturation detection just uses phi2.
+        attrs={"tsat": detect_saturation_time(ds, window=window, threshold=threshold)},
+    )
+
+
+def render_fields_time_traces(reduced: xr.Dataset) -> Figure:
+    """Draw the traces from :func:`compute_fields_time_traces`."""
+    tsat = float(reduced.attrs["tsat"])
+    t = reduced["t"].values
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    # Plot each field on log scale
+    for field in reduced.data_vars:
+        ax.semilogy(t, reduced[field].values, linewidth=1.5, label=field)
+
+    # Highlight saturated region
+    if not np.isnan(tsat):
+        ax.axvspan(tsat, t.max(), alpha=0.2, color="green")
+        ax.axvline(tsat, color="green", linestyle="--", linewidth=2,
+                   label=f"Saturation (t = {tsat:.2f})")
+
+    ax.set_xlabel("t", fontsize=12)
+    ax.set_ylabel(r"field$^2$", fontsize=12)
+    ax.legend()
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    return fig
 
 
 def plot_fields_time_traces(
@@ -17,6 +64,8 @@ def plot_fields_time_traces(
     filename: str | None = None,
     window: float = 20.0,
     threshold: float = 0.1,
+    save_data: bool = True,
+    quiet: bool = False,
 ) -> Path:
     """Plot time trace of each available field from (phi2, apar2, bpar2)
     and highlight the saturated region.
@@ -34,50 +83,26 @@ def plot_fields_time_traces(
     threshold : float, optional
         Growth rate threshold below which saturation is considered to
         have occurred. Default is 0.1.
+    save_data : bool, optional
+        Write the plotted data and its provenance alongside the figure; see
+        :mod:`gs2ew.bundle`. Default True.
+    quiet : bool, optional
+        Suppress the "Saved ..." message. Default False.
 
     Returns
     -------
     Path
         Path to the saved figure file
     """
-    # Determine enabled fields
-    fields = [f for f in ["phi2", "apar2", "bpar2"] if f in ds]
-
-    # Detect saturation time (just uses phi2)
-    tsat = detect_saturation_time(ds, window=window, threshold=threshold)
-
-    # Create output directory if it doesn't exist
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Set default filename
-    if filename is None:
-        filename = "field_time_traces.png"
-
-    # Extract time
-    t = ds["t"].values
-
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 5))
-
-    # Plot each field on log scale
-    for field in fields:
-        field_trace = ds[field].values
-        ax.semilogy(t, field_trace, linewidth=1.5, label=field)
-
-    # Highlight saturated region
-    if not np.isnan(tsat):
-        ax.axvspan(tsat, t.max(), alpha=0.2, color="green")
-        ax.axvline(tsat, color="green", linestyle="--", linewidth=2,
-                   label=f"Saturation (t = {tsat:.2f})")
-
-    ax.set_xlabel("t", fontsize=12)
-    ax.set_ylabel(r"field$^2$", fontsize=12)
-    ax.legend()
-    ax.grid(alpha=0.3)
-    plt.tight_layout()
-
-    return common.save_figure(fig, output_dir, filename)
+    return make_plot(
+        "fields_time_traces",
+        ds,
+        dict(window=window, threshold=threshold),
+        output_dir=output_dir,
+        filename=filename,
+        save_data=save_data,
+        quiet=quiet,
+    )
 
 
 def _get_phi_complex(ds: xr.Dataset) -> xr.DataArray:
@@ -140,6 +165,80 @@ def _global_phi2_ylim(
     return 0.0, hi + pad
 
 
+def compute_phi2_by_theta(
+    ds: xr.Dataset,
+    window: float | None = None,
+    tstart: float | str | None = None,
+    saturation_pad: float = DEFAULT_SATURATION_PAD,
+    quiet: bool = False,
+) -> xr.Dataset:
+    """The zonal and non-zonal profiles :func:`plot_phi2_by_theta` draws.
+
+    Raises
+    ------
+    ValueError
+        If averaging is requested but the potential has no time dimension.
+    KeyError
+        If no potential field is present in `ds`.
+    """
+    zonal, non_zonal = _phi2_zonal_nonzonal(_get_phi_complex(ds))
+    has_t = "t" in zonal.dims
+
+    tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
+
+    if tw.averaging and not has_t:
+        raise ValueError(
+            "Time averaging was requested but the potential has no time "
+            "dimension; a time-resolved 'phi_t' (write_phi_over_time) is "
+            "required."
+        )
+
+    reduced = xr.Dataset(attrs=tw.attrs())
+    for name, da, part in (
+        ("phi2_zonal", zonal, "zonal (ky = 0)"),
+        ("phi2_nonzonal", non_zonal, "non-zonal (ky > 0)"),
+    ):
+        if has_t:
+            da = common.time_mean(tw, da)
+        # Selecting ky = 0 leaves a scalar ky behind; the name says it.
+        reduced[name] = da.reset_coords(drop=True)
+        reduced[name].attrs = {
+            "long_name": f"|phi|^2 summed over kx, {part} part",
+            **({"cell_methods": "t: mean"} if tw.averaging else {}),
+        }
+    return reduced
+
+
+def render_phi2_by_theta(
+    reduced: xr.Dataset,
+    ylim: tuple[float, float] | None = None,
+) -> Figure:
+    """Draw the profiles from :func:`compute_phi2_by_theta`.
+
+    `ylim` fixes the y-axis; the movie helper uses it to keep the axis steady
+    across frames.
+    """
+    title = TimeWindow.from_attrs(reduced.attrs).title
+    theta = reduced["theta"].values
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(theta, reduced["phi2_zonal"].values, linewidth=1.5,
+            color=common.QUANTITY_COLOURS["U"], label=r"zonal ($k_y = 0$)")
+    ax.plot(theta, reduced["phi2_nonzonal"].values, linewidth=1.5, linestyle="--",
+            color=common.QUANTITY_COLOURS["H"], label=r"non-zonal ($k_y > 0$)")
+
+    if title is not None:
+        ax.set_title(title)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    ax.set_xlabel(r"$\theta$", fontsize=12)
+    ax.set_ylabel(r"$\sum_{k_x} |\phi|^2$", fontsize=12)
+    ax.legend()
+    ax.grid(alpha=0.3)
+    plt.tight_layout()
+    return fig
+
+
 def plot_phi2_by_theta(
     ds: xr.Dataset,
     window: float | None = None,
@@ -149,6 +248,7 @@ def plot_phi2_by_theta(
     filename: str | None = None,
     ylim: tuple[float, float] | None = None,
     tight_bbox: bool = True,
+    save_data: bool = True,
     quiet: bool = False,
 ) -> Path:
     """Plot the poloidal structure of ``|phi|^2``, split into its zonal
@@ -185,6 +285,9 @@ def plot_phi2_by_theta(
         If True (default), save with ``bbox_inches="tight"``. Movie frames pass
         False so every frame has identical pixel dimensions (required by the
         ffmpeg encoder).
+    save_data : bool, optional
+        Write the plotted data and its provenance alongside the figure; see
+        :mod:`gs2ew.bundle`. Default True.
     quiet : bool, optional
         Suppress the "Saved ..." message. Default False.
 
@@ -200,44 +303,16 @@ def plot_phi2_by_theta(
     KeyError
         If no potential field is present in `ds`.
     """
-    zonal, non_zonal = _phi2_zonal_nonzonal(_get_phi_complex(ds))
-    has_t = "t" in zonal.dims
-
-    tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
-
-    theta = ds["theta"].values
-
-    if tw.averaging and not has_t:
-        raise ValueError(
-            "Time averaging was requested but the potential has no time "
-            "dimension; a time-resolved 'phi_t' (write_phi_over_time) is "
-            "required."
-        )
-
-    zonal = tw.mean(zonal) if has_t else zonal
-    non_zonal = tw.mean(non_zonal) if has_t else non_zonal
-    title = tw.title
-    if filename is None:
-        filename = common.default_filename("phi2_by_theta", tw.averaging)
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(theta, zonal.values, linewidth=1.5, color=common.QUANTITY_COLOURS["U"],
-            label=r"zonal ($k_y = 0$)")
-    ax.plot(theta, non_zonal.values, linewidth=1.5, linestyle="--",
-            color=common.QUANTITY_COLOURS["H"], label=r"non-zonal ($k_y > 0$)")
-
-    if title is not None:
-        ax.set_title(title)
-    if ylim is not None:
-        ax.set_ylim(ylim)
-    ax.set_xlabel(r"$\theta$", fontsize=12)
-    ax.set_ylabel(r"$\sum_{k_x} |\phi|^2$", fontsize=12)
-    ax.legend()
-    ax.grid(alpha=0.3)
-    plt.tight_layout()
-
-    return common.save_figure(
-        fig, output_dir, filename, tight_bbox=tight_bbox, quiet=quiet
+    return make_plot(
+        "phi2_by_theta",
+        ds,
+        dict(window=window, tstart=tstart, saturation_pad=saturation_pad),
+        dict(ylim=ylim),
+        output_dir=output_dir,
+        filename=filename,
+        tight_bbox=tight_bbox,
+        save_data=save_data,
+        quiet=quiet,
     )
 
 
@@ -299,6 +374,7 @@ def plot_phi2_by_theta_movie(
             filename=frame_path.name,
             ylim=ylim,
             tight_bbox=False,
+            save_data=False,
             quiet=True,
         )
 
@@ -307,12 +383,97 @@ def plot_phi2_by_theta_movie(
     )
 
 
+# (field prefix, label) for each field whose spectra may be present.
+_SPECTRUM_FIELDS = [
+    ("phi", r"$|\phi|^2$"),
+    ("apar", r"$|A_\parallel|^2$"),
+    ("bpar", r"$|B_\parallel|^2$"),
+]
+
+
+def compute_fields_by_mode(
+    ds: xr.Dataset,
+    window: float | None = None,
+    tstart: float | str | None = None,
+    saturation_pad: float = DEFAULT_SATURATION_PAD,
+    quiet: bool = False,
+) -> xr.Dataset:
+    """The spectra :func:`plot_fields_by_mode` draws.
+
+    GS2's ``<field>2_by_kx`` and ``<field>2_by_ky`` for each field that has
+    both, at the last timestep or averaged over a window, with ``kx`` sorted
+    out of FFT order.
+
+    Raises
+    ------
+    ValueError
+        If no field has both spectra.
+    """
+    fields = [
+        f for f, _ in _SPECTRUM_FIELDS
+        if f"{f}2_by_kx" in ds and f"{f}2_by_ky" in ds
+    ]
+    if not fields:
+        raise ValueError(
+            "No field spectra found: expected '<field>2_by_kx' and "
+            "'<field>2_by_ky' for at least one of phi/apar/bpar."
+        )
+
+    tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
+    reduced = xr.Dataset(attrs=tw.attrs())
+    for field in fields:
+        for name in (f"{field}2_by_kx", f"{field}2_by_ky"):
+            reduced[name] = common.time_mean(tw, ds[name])
+    # kx is stored in FFT layout; sort to a monotonic axis for a clean line
+    # plot. ky is already monotonic and non-negative.
+    return reduced.sortby("kx")
+
+
+def render_fields_by_mode(reduced: xr.Dataset) -> Figure:
+    """Draw the spectra from :func:`compute_fields_by_mode`."""
+    fields = [
+        (f, lab) for f, lab in _SPECTRUM_FIELDS if f"{f}2_by_kx" in reduced
+    ]
+    kx = reduced["kx"].values
+    ky = reduced["ky"].values
+
+    n_cols = len(fields)
+    fig, axes = plt.subplots(
+        2, n_cols, figsize=(4.5 * n_cols, 7.0), squeeze=False
+    )
+
+    for col, (field, lab) in enumerate(fields):
+        ax_kx, ax_ky = axes[0, col], axes[1, col]
+        ax_kx.semilogy(kx, reduced[f"{field}2_by_kx"].values, marker=".", ms=4, lw=1.3)
+        ax_ky.semilogy(ky, reduced[f"{field}2_by_ky"].values, marker=".", ms=4, lw=1.3)
+
+        ax_kx.set_title(lab)
+        ax_kx.set_xlabel(r"$k_x \rho_\text{ref}$")
+        ax_ky.set_xlabel(r"$k_y \rho_\text{ref}$")
+        for ax in (ax_kx, ax_ky):
+            ax.grid(alpha=0.3, which="both")
+
+    axes[0, 0].set_ylabel("spectral power")
+    axes[1, 0].set_ylabel("spectral power")
+
+    title = TimeWindow.from_attrs(reduced.attrs).title
+    if title is not None:
+        fig.suptitle(title)
+    plt.tight_layout()
+    return fig
+
+
 def plot_fields_by_mode(
     ds: xr.Dataset,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
+    window: float | None = None,
+    tstart: float | str | None = None,
+    saturation_pad: float = DEFAULT_SATURATION_PAD,
+    save_data: bool = True,
+    quiet: bool = False,
 ) -> Path:
-    """Plot the kx and ky spectra of each available field at the last time step.
+    """Plot the kx and ky spectra of each available field.
 
     Each enabled field (phi, apar, bpar) gets one column of two panels: the top
     shows the spectrum against ``kx`` (summed over ``ky``) and the bottom against
@@ -330,66 +491,58 @@ def plot_fields_by_mode(
     output_dir : str or Path, optional
         Directory where the plot will be saved. Default is "outputs".
     filename : str, optional
-        Filename for the plot. If None, uses "fields_by_mode.png".
+        Filename for the plot. If None, uses "fields_by_mode.png" (or
+        "fields_by_mode_averaged.png" when averaging).
+    window, tstart, saturation_pad : optional
+        The time window, as for every other plot; see :mod:`gs2ew.timebase`.
+        By default the last timestep is plotted.
+    save_data : bool, optional
+        Write the plotted data and its provenance alongside the figure; see
+        :mod:`gs2ew.bundle`. Default True.
+    quiet : bool, optional
+        Suppress the "Saved ..." message. Default False.
 
     Returns
     -------
     Path
         Path to the saved figure file
     """
-    # (field prefix, label); kept only if both 1D spectra are present.
-    candidates = [
-        ("phi", r"$|\phi|^2$"),
-        ("apar", r"$|A_\parallel|^2$"),
-        ("bpar", r"$|B_\parallel|^2$"),
-    ]
-    fields = [
-        (f, lab) for f, lab in candidates
-        if f"{f}2_by_kx" in ds and f"{f}2_by_ky" in ds
-    ]
-    if not fields:
-        raise ValueError(
-            "No field spectra found: expected '<field>2_by_kx' and "
-            "'<field>2_by_ky' for at least one of phi/apar/bpar."
-        )
-
-    # Create output directory if it doesn't exist
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Set default filename
-    if filename is None:
-        filename = "fields_by_mode.png"
-
-    # kx is stored in FFT layout; sort to a monotonic axis for a clean line
-    # plot. ky is already monotonic and non-negative.
-    kx = ds["kx"].values
-    kx_order = np.argsort(kx)
-    kx_sorted = kx[kx_order]
-    ky = ds["ky"].values
-
-    n_cols = len(fields)
-    fig, axes = plt.subplots(
-        2, n_cols, figsize=(4.5 * n_cols, 7.0), squeeze=False
+    return make_plot(
+        "fields_by_mode",
+        ds,
+        dict(window=window, tstart=tstart, saturation_pad=saturation_pad),
+        output_dir=output_dir,
+        filename=filename,
+        save_data=save_data,
+        quiet=quiet,
     )
 
-    for col, (field, lab) in enumerate(fields):
-        kx_spec = ds[f"{field}2_by_kx"].isel(t=-1).values[kx_order]
-        ky_spec = ds[f"{field}2_by_ky"].isel(t=-1).values
 
-        ax_kx, ax_ky = axes[0, col], axes[1, col]
-        ax_kx.semilogy(kx_sorted, kx_spec, marker=".", ms=4, lw=1.3)
-        ax_ky.semilogy(ky, ky_spec, marker=".", ms=4, lw=1.3)
-
-        ax_kx.set_title(lab)
-        ax_kx.set_xlabel(r"$k_x \rho_\text{ref}$")
-        ax_ky.set_xlabel(r"$k_y \rho_\text{ref}$")
-        for ax in (ax_kx, ax_ky):
-            ax.grid(alpha=0.3, which="both")
-
-    axes[0, 0].set_ylabel("spectral power")
-    axes[1, 0].set_ylabel("spectral power")
-
-    plt.tight_layout()
-
-    return common.save_figure(fig, output_dir, filename)
+register(
+    PlotSpec(
+        "fields_time_traces",
+        compute_fields_time_traces,
+        render_fields_time_traces,
+        lambda reduced: "field_time_traces.png",
+    )
+)
+register(
+    PlotSpec(
+        "phi2_by_theta",
+        compute_phi2_by_theta,
+        render_phi2_by_theta,
+        lambda reduced: common.default_filename(
+            "phi2_by_theta", TimeWindow.from_attrs(reduced.attrs).averaging
+        ),
+    )
+)
+register(
+    PlotSpec(
+        "fields_by_mode",
+        compute_fields_by_mode,
+        render_fields_by_mode,
+        lambda reduced: common.default_filename(
+            "fields_by_mode", TimeWindow.from_attrs(reduced.attrs).averaging
+        ),
+    )
+)
