@@ -53,11 +53,6 @@ with xr.open_dataset(args.nc_file) as ds:
     # +/-1 std bands showing the temporal spread over that window.
     plot_transfer_theta(ds, tstart="saturation", show_std=True, output_dir=out)
 
-    # `bmag_power=1` cancels the 1/bmag currently carried by GS2's free-energy
-    # prefactor and leaves the kinetic-energy transfer alone. `div_by_bmag2=True`
-    # is the other side of the same investigation (shorthand for bmag_power=-2).
-    # plot_transfer_theta(ds, tstart="saturation", bmag_power=1, output_dir=out)
-
     # ── Transfer vs wavevector ────────────────────────────────────────────────
 
     # (theta, k) heatmaps and the theta-integrated 1D spectrum. `reduction` picks

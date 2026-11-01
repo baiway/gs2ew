@@ -49,8 +49,6 @@ def plot_transfer_trapped_passing(
     saturation_pad: float = DEFAULT_SATURATION_PAD,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
     normalise: bool = False,
@@ -97,7 +95,6 @@ def plot_transfer_trapped_passing(
     ValueError
         If `ds` has no trapped/passing transfer diagnostics.
     """
-    scaling = catalog.resolve_scaling(div_by_bmag2, bmag_power)
     tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
 
     drives = catalog.available_drives(
@@ -131,7 +128,7 @@ def plot_transfer_trapped_passing(
             ax = axes[i][j]
 
             for drive in (d for d in drives if d.field == field):
-                da = catalog.load(ds, drive, "trapped_passing", scaling)
+                da = catalog.load(ds, drive, "trapped_passing")
                 da = da.isel(species=j).sum("kxt_shift")
 
                 for tp in tp_values:
@@ -160,7 +157,7 @@ def plot_transfer_trapped_passing(
                         linewidth=1.5,
                         color=common.drive_colour(drive),
                         linestyle=TP_LINESTYLES[tp],
-                        label=f"{drive.label_short(scaling)} {catalog.TP_LABELS[tp]}",
+                        label=f"{drive.label_short()} {catalog.TP_LABELS[tp]}",
                     )
                     if std is not None:
                         ax.fill_between(
@@ -217,8 +214,6 @@ def plot_transfer_trapped_passing_movie(
     saturation_pad: float = DEFAULT_SATURATION_PAD,
     output_dir: str | Path = "outputs",
     filename: str = "transfer_trapped_passing.mp4",
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
     normalise: bool | str = False,
@@ -233,7 +228,6 @@ def plot_transfer_trapped_passing_movie(
     :func:`gs2ew.plots.transfer_theta.plot_transfer_theta_movie`: False, per
     ``"frame"``, or movie-wide ``"movie"``.
     """
-    scaling = catalog.resolve_scaling(div_by_bmag2, bmag_power)
     indices = frame_indices(ds, tstart, window, saturation_pad, stride)
 
     drives = catalog.available_drives(
@@ -249,7 +243,7 @@ def plot_transfer_trapped_passing_movie(
     # normalisation shifts as the movie plays.
     curves: dict[tuple[Drive, int, int], np.ndarray] = {}
     for drive in drives:
-        da = catalog.load(ds, drive, "trapped_passing", scaling)
+        da = catalog.load(ds, drive, "trapped_passing")
         da = da.isel(t=indices).sum("kxt_shift")
         for j in range(n_species):
             for tp in tp_values:
@@ -280,7 +274,6 @@ def plot_transfer_trapped_passing_movie(
             tstart=float(t_values[t_index]) if window is not None else None,
             output_dir=frame_path.parent,
             filename=frame_path.name,
-            bmag_power=scaling.field_power,
             quantities=quantities,
             fields=fields,
             normalise=frame_norm,
@@ -304,8 +297,6 @@ def plot_transfer_trapped_passing_spectral(
     saturation_pad: float = DEFAULT_SATURATION_PAD,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
     klim: float | None = None,
     vmax: float | None = None,
     tight_bbox: bool = True,
@@ -334,11 +325,10 @@ def plot_transfer_trapped_passing_spectral(
     Path
         Path to the saved figure.
     """
-    scaling = catalog.resolve_scaling(div_by_bmag2, bmag_power)
     tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
 
     drive = Drive(quantity, field)
-    da = catalog.load(ds, drive, "trapped_passing", scaling)
+    da = catalog.load(ds, drive, "trapped_passing")
     da = tw.mean(da)
     if klim is not None:
         da = da.sel(kxt_shift=slice(-klim, klim))
@@ -388,9 +378,9 @@ def plot_transfer_trapped_passing_spectral(
                     f"{catalog.TP_LABELS[tp]}\n" + r"$\theta$", fontsize=11
                 )
 
-    fig.colorbar(mesh, ax=axes, label=drive.label(scaling), shrink=0.85)
+    fig.colorbar(mesh, ax=axes, label=drive.label(), shrink=0.85)
 
-    title = drive.label(scaling)
+    title = drive.label()
     if tw.title is not None:
         title = f"{title} — {tw.title}"
     fig.suptitle(title)
@@ -409,8 +399,6 @@ def plot_transfer_trapped_passing_spectral_movie(
     saturation_pad: float = DEFAULT_SATURATION_PAD,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
     klim: float | None = None,
     stride: int = 1,
     fps: int = 10,
@@ -418,11 +406,10 @@ def plot_transfer_trapped_passing_spectral_movie(
     verbose: bool = False,
 ) -> Path:
     """Animate :func:`plot_transfer_trapped_passing_spectral` over time."""
-    scaling = catalog.resolve_scaling(div_by_bmag2, bmag_power)
     indices = frame_indices(ds, tstart, window, saturation_pad, stride)
 
     drive = Drive(quantity, field)
-    da = catalog.load(ds, drive, "trapped_passing", scaling).isel(t=indices)
+    da = catalog.load(ds, drive, "trapped_passing").isel(t=indices)
     if klim is not None:
         da = da.sel(kxt_shift=slice(-klim, klim))
     vmax = common.symmetric_limit(np.asarray(da.values))
@@ -442,7 +429,6 @@ def plot_transfer_trapped_passing_spectral_movie(
             tstart=float(t_values[t_index]) if window is not None else None,
             output_dir=frame_path.parent,
             filename=frame_path.name,
-            bmag_power=scaling.field_power,
             klim=klim,
             vmax=vmax,
             tight_bbox=False,

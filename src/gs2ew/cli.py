@@ -49,19 +49,6 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
         help="fraction of the post-saturation interval to skip (default 0.20)",
     )
     parser.add_argument(
-        "--bmag-power",
-        type=float,
-        default=None,
-        help="multiply the field drives by bmag**POWER (e.g. 1 to cancel the "
-        "1/bmag in GS2's free-energy prefactor)",
-    )
-    parser.add_argument(
-        "--kinetic-bmag-power",
-        type=float,
-        default=0.0,
-        help="multiply the kinetic-energy transfer by bmag**POWER",
-    )
-    parser.add_argument(
         "--quantities",
         nargs="*",
         default=None,
@@ -75,12 +62,6 @@ def _add_common_options(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--klim", type=float, default=None, help="clip wavevector axes to +/-KLIM"
-    )
-    parser.add_argument(
-        "--ke-variant",
-        default=None,
-        help="variant tag in the kinetic-energy variable name (e.g. 'new'), "
-        "for GS2 branches that write more than one",
     )
     parser.add_argument(
         "--movies", action="store_true", help="also render the movies (slow)"
@@ -118,9 +99,7 @@ def cmd_info(args: argparse.Namespace) -> int:
 
         print("\n=== Transfer diagnostics ===")
         for reduction in list(catalog.REDUCTIONS) + ["trapped_passing"]:
-            drives = catalog.available_drives(
-                ds, reduction, ke_variant=args.ke_variant
-            )
+            drives = catalog.available_drives(ds, reduction)
             names = ", ".join(
                 f"{d.quantity}/{d.field or '-'}" for d in drives
             )
@@ -144,10 +123,6 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
         window=args.window,
         saturation_pad=args.saturation_pad,
     )
-    scale_opts = dict(
-        bmag_power=args.bmag_power,
-        kinetic_bmag_power=args.kinetic_bmag_power,
-    )
     # The trapped/passing diagnostics have no kinetic-energy counterpart, so
     # they take the quantity selection but not the kinetic options.
     select = dict(quantities=args.quantities, include_kinetic=not args.no_kinetic)
@@ -158,13 +133,13 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
     fields.plot_phi2_by_theta(ds, output_dir=output_dir)
 
     transfer_theta.plot_transfer_theta(
-        ds, output_dir=output_dir, show_std=True, **window_opts, **scale_opts, **select
+        ds, output_dir=output_dir, show_std=True, **window_opts, **select
     )
     transfer_summary.plot_transfer_summary(
-        ds, output_dir=output_dir, **window_opts, **scale_opts, **select
+        ds, output_dir=output_dir, **window_opts, **select
     )
     transfer_time.plot_transfer_hovmoller(
-        ds, output_dir=output_dir, **scale_opts, **select
+        ds, output_dir=output_dir, **select
     )
 
     for reduction in ("kxtarget", "kysource"):
@@ -173,9 +148,7 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
             reduction=reduction,
             output_dir=output_dir,
             klim=args.klim,
-            ke_variant=args.ke_variant,
             **window_opts,
-            **scale_opts,
             **select,
         )
         transfer_spectral.plot_transfer_spectrum(
@@ -183,9 +156,7 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
             reduction=reduction,
             output_dir=output_dir,
             klim=args.klim,
-            ke_variant=args.ke_variant,
             **window_opts,
-            **scale_opts,
             **select,
         )
         transfer_time.plot_transfer_butterfly(
@@ -193,8 +164,6 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
             reduction=reduction,
             output_dir=output_dir,
             klim=args.klim,
-            ke_variant=args.ke_variant,
-            **scale_opts,
             **select,
         )
 
@@ -208,32 +177,30 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
             show_std=True,
             **window_opts,
             **tp_select,
-            bmag_power=args.bmag_power,
         )
         transfer_tp.plot_transfer_trapped_passing_spectral(
             ds,
             output_dir=output_dir,
             klim=args.klim,
             **window_opts,
-            bmag_power=args.bmag_power,
         )
 
     if args.movies:
         movie_opts = dict(fps=args.fps, stride=args.stride, output_dir=output_dir)
         transfer_theta.plot_transfer_theta_movie(
-            ds, normalise="movie", **movie_opts, **scale_opts, **select
+            ds, normalise="movie", **movie_opts, **select
         )
         transfer_spectral.plot_transfer_spectral_movie(
-            ds, klim=args.klim, **movie_opts, **scale_opts, **select
+            ds, klim=args.klim, **movie_opts, **select
         )
         if catalog.available_drives(
             ds, "trapped_passing", args.quantities, include_kinetic=False
         ):
             transfer_tp.plot_transfer_trapped_passing_movie(
-                ds, **movie_opts, **tp_select, bmag_power=args.bmag_power
+                ds, **movie_opts, **tp_select
             )
             transfer_tp.plot_transfer_trapped_passing_spectral_movie(
-                ds, klim=args.klim, **movie_opts, bmag_power=args.bmag_power
+                ds, klim=args.klim, **movie_opts
             )
 
 
@@ -296,7 +263,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     info = sub.add_parser("info", help="show metadata and available diagnostics")
     info.add_argument("nc_file", help="path to a GS2 .out.nc file")
-    info.add_argument("--ke-variant", default=None)
     info.set_defaults(func=cmd_info)
 
     plot = sub.add_parser("plot", help="render the standard plot set")

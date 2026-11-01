@@ -37,13 +37,9 @@ def plot_transfer_hovmoller(
     tend: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str = "transfer_hovmoller.png",
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
-    kinetic_bmag_power: float = 0.0,
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
     include_kinetic: bool = True,
-    ke_variant: str | None = None,
     share: str = "row",
     percentile: float = 99.5,
     quiet: bool = False,
@@ -79,18 +75,17 @@ def plot_transfer_hovmoller(
     Path
         Path to the saved figure.
     """
-    scaling = catalog.resolve_scaling(div_by_bmag2, bmag_power, kinetic_bmag_power)
     sub = _time_slice(ds, tstart, tend)
 
     drives = catalog.available_drives(
-        sub, "theta", quantities, fields, include_kinetic, ke_variant
+        sub, "theta", quantities, fields, include_kinetic
     )
     if not drives:
         raise ValueError("No transfer diagnostics found in dataset.")
 
     panels = {
         drive: np.asarray(
-            catalog.load(sub, drive, "theta", scaling, ke_variant)
+            catalog.load(sub, drive, "theta")
             .transpose("theta", "t")
             .values
         )
@@ -103,7 +98,6 @@ def plot_transfer_hovmoller(
         y=np.asarray(sub["theta"].values),
         xlabel=r"$t\, (a/v_\mathrm{th})$",
         ylabel=r"$\theta$",
-        scaling=scaling,
         share=share,
         percentile=percentile,
     )
@@ -118,14 +112,10 @@ def plot_transfer_butterfly(
     tend: float | None = None,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
-    kinetic_bmag_power: float = 0.0,
     jacobian: bool = True,
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
     include_kinetic: bool = True,
-    ke_variant: str | None = None,
     klim: float | None = None,
     share: str = "row",
     percentile: float = 99.5,
@@ -166,12 +156,10 @@ def plot_transfer_butterfly(
             "The 'theta' reduction has no wavevector axis; use "
             "plot_transfer_hovmoller instead."
         )
-
-    scaling = catalog.resolve_scaling(div_by_bmag2, bmag_power, kinetic_bmag_power)
     sub = _time_slice(ds, tstart, tend)
 
     drives = catalog.available_drives(
-        sub, reduction, quantities, fields, include_kinetic, ke_variant
+        sub, reduction, quantities, fields, include_kinetic
     )
     if not drives:
         raise ValueError(f"No '{reduction}' transfer diagnostics found in dataset.")
@@ -182,7 +170,7 @@ def plot_transfer_butterfly(
     panels: dict[Drive, np.ndarray] = {}
     k_values: np.ndarray | None = None
     for drive in drives:
-        da = catalog.load(sub, drive, reduction, scaling, ke_variant)
+        da = catalog.load(sub, drive, reduction)
         da = theta_integral(da, ds, jacobian=jacobian)
         if klim is not None:
             da = da.sel({dim: slice(-klim, klim)})
@@ -196,7 +184,6 @@ def plot_transfer_butterfly(
         y=k_values,
         xlabel=r"$t\, (a/v_\mathrm{th})$",
         ylabel=catalog.K_LABELS[dim],
-        scaling=scaling,
         cbar_label=r"$\int \mathrm{d}\theta\, J\, N_\mathbf{k}$",
         share=share,
         percentile=percentile,

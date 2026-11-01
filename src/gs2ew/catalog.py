@@ -87,15 +87,8 @@ class Drive:
     def is_kinetic(self) -> bool:
         return self.quantity == KINETIC
 
-    def varname(self, reduction: str = "theta", ke_variant: str | None = None) -> str:
-        """netCDF variable name for this drive under `reduction`.
-
-        `ke_variant` inserts a variant tag into the kinetic-energy name, as on
-        GS2's `experimental/compare-KE-transfer-prefactors` branch which writes
-        both `kinetic_energy_transfer_new_theta` and `..._old_theta`. The
-        `fix/kinetic-energy-transfer-prefactor` branch we target writes the
-        plain name, so `ke_variant` is None by default.
-        """
+    def varname(self, reduction: str = "theta") -> str:
+        """netCDF variable name for this drive under `reduction`."""
         if reduction == "trapped_passing":
             if self.is_kinetic:
                 raise ValueError(
@@ -113,101 +106,27 @@ class Drive:
             ) from None
 
         if self.is_kinetic:
-            tag = f"_{ke_variant}" if ke_variant else ""
-            return f"kinetic_energy_transfer{tag}_theta{suffix}"
+            return f"kinetic_energy_transfer_theta{suffix}"
 
         stem, _ = QUANTITIES[self.quantity]
         return f"{stem}_transfer_{self.field}_theta{suffix}"
 
-    def label(self, scaling: "BmagScaling | None" = None) -> str:
+    def label(self) -> str:
         r"""Full LaTeX label, e.g. ``$N_\mathbf{k}^{U,\delta\phi}$``."""
         if self.is_kinetic:
-            return _with_bmag(KINETIC_LABEL, scaling.kinetic_power if scaling else 0.0)
+            return KINETIC_LABEL
         sym = FIELDS[self.field]
-        base = rf"$N_\mathbf{{k}}^{{{self.quantity},{sym}}}$"
-        return _with_bmag(base, scaling.field_power if scaling else 0.0)
+        return rf"$N_\mathbf{{k}}^{{{self.quantity},{sym}}}$"
 
-    def label_short(self, scaling: "BmagScaling | None" = None) -> str:
+    def label_short(self) -> str:
         r"""Field-free label, e.g. ``$N_\mathbf{k}^{U}$``.
 
         Used as the legend entry in plots faceted by field, where the mediator
         field is already named in the column title.
         """
         if self.is_kinetic:
-            return _with_bmag(KINETIC_LABEL, scaling.kinetic_power if scaling else 0.0)
-        base = rf"$N_\mathbf{{k}}^{{{self.quantity}}}$"
-        return _with_bmag(base, scaling.field_power if scaling else 0.0)
-
-
-def _with_bmag(label: str, power: float) -> str:
-    """Append a ``B_0`` factor to a ``$...$`` label to reflect `power`."""
-    if power == 0:
-        return label
-    if power == 1:
-        factor = r"B_0"
-    elif power == -1:
-        factor = r"/B_0"
-    elif power > 0:
-        factor = rf"B_0^{{{_fmt_power(power)}}}"
-    else:
-        factor = rf"/B_0^{{{_fmt_power(-power)}}}"
-    return label[:-1] + factor + "$"
-
-
-def _fmt_power(power: float) -> str:
-    return str(int(power)) if float(power).is_integer() else f"{power:g}"
-
-
-@dataclass(frozen=True)
-class BmagScaling:
-    r"""Ad-hoc ``bmag`` powers applied to the transfer diagnostics.
-
-    Scratch machinery for the ongoing investigation into which powers of
-    :math:`B_0` belong in the GS2 prefactors. The field-mediated drives
-    (H, S, U) currently carry a ``1/bmag`` from
-    ``diagnostics_free_energy_transfer``, and the kinetic-energy transfer
-    carries ``1/bmag**2`` from ``diagnostics_kinetic_energy_transfer``; what
-    is certain is that the two differ by ``bmag**2``.
-
-    `field_power` multiplies H/S/U by ``bmag**field_power``, `kinetic_power`
-    multiplies the kinetic-energy transfer by ``bmag**kinetic_power``. Setting
-    ``field_power=1`` cancels the ``1/bmag`` in the current GS2 implementation
-    and leaves the kinetic-energy transfer alone.
-
-    This whole mechanism is expected to be removed once the correct prefactors
-    are settled upstream.
-    """
-
-    field_power: float = 0.0
-    kinetic_power: float = 0.0
-
-    @property
-    def active(self) -> bool:
-        return self.field_power != 0 or self.kinetic_power != 0
-
-    def power_for(self, drive: Drive) -> float:
-        return self.kinetic_power if drive.is_kinetic else self.field_power
-
-
-def resolve_scaling(
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
-    kinetic_bmag_power: float = 0.0,
-) -> BmagScaling:
-    """Build a :class:`BmagScaling` from the plot functions' keyword options.
-
-    `div_by_bmag2` is the long-standing shorthand for dividing the field
-    drives by ``bmag**2``, i.e. ``bmag_power=-2``. An explicit `bmag_power`
-    takes precedence over it.
-    """
-    if bmag_power is None:
-        bmag_power = -2.0 if div_by_bmag2 else 0.0
-    elif div_by_bmag2:
-        raise ValueError(
-            "Pass either `div_by_bmag2` or `bmag_power`, not both "
-            "(`div_by_bmag2=True` is shorthand for `bmag_power=-2`)."
-        )
-    return BmagScaling(field_power=bmag_power, kinetic_power=kinetic_bmag_power)
+            return KINETIC_LABEL
+        return rf"$N_\mathbf{{k}}^{{{self.quantity}}}$"
 
 
 def available_drives(
@@ -216,7 +135,6 @@ def available_drives(
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
     include_kinetic: bool = True,
-    ke_variant: str | None = None,
 ) -> list[Drive]:
     """Return every drive present in `ds` for the given `reduction`.
 
@@ -238,20 +156,14 @@ def available_drives(
 
     if include_kinetic and reduction != "trapped_passing":
         ke = Drive(KINETIC)
-        if ke.varname(reduction, ke_variant) in ds:
+        if ke.varname(reduction) in ds:
             drives.append(ke)
 
     return drives
 
 
-def load(
-    ds: xr.Dataset,
-    drive: Drive,
-    reduction: str = "theta",
-    scaling: BmagScaling | None = None,
-    ke_variant: str | None = None,
-) -> xr.DataArray:
-    """Return the data for `drive`, with any `scaling` applied.
+def load(ds: xr.Dataset, drive: Drive, reduction: str = "theta") -> xr.DataArray:
+    """Return the data for `drive`.
 
     The returned array keeps its netCDF dimensions (`t`, `theta`, and the
     reduction's spectral or trapped/passing axes).
@@ -261,24 +173,10 @@ def load(
     KeyError
         If the variable is not present in `ds`.
     """
-    name = drive.varname(reduction, ke_variant)
+    name = drive.varname(reduction)
     if name not in ds:
         raise KeyError(f"{name!r} not found in dataset.")
-
-    da = ds[name]
-
-    if scaling is not None:
-        power = scaling.power_for(drive)
-        if power != 0:
-            if "bmag" not in ds:
-                raise ValueError(
-                    "bmag scaling was requested but `bmag` is not in the dataset."
-                )
-            # bmag is a function of theta, so this reshapes the poloidal
-            # profile rather than rescaling it uniformly.
-            da = da * ds["bmag"] ** power
-
-    return da.rename(name)
+    return ds[name]
 
 
 def field_columns(drives: list[Drive]) -> list[tuple[str | None, list[Drive]]]:
@@ -339,8 +237,6 @@ __all__ = [
     "K_LABELS",
     "TP_LABELS",
     "Drive",
-    "BmagScaling",
-    "resolve_scaling",
     "available_drives",
     "load",
     "field_columns",

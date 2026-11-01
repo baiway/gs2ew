@@ -15,7 +15,7 @@ import numpy as np
 import xarray as xr
 
 from gs2ew import catalog
-from gs2ew.catalog import BmagScaling, Drive
+from gs2ew.catalog import Drive
 from gs2ew.movie import render_movie
 from gs2ew.plots import _common as common
 from gs2ew.timebase import DEFAULT_SATURATION_PAD, TimeWindow, frame_indices, resolve_window
@@ -28,16 +28,12 @@ def plot_transfer_theta(
     saturation_pad: float = DEFAULT_SATURATION_PAD,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
-    kinetic_bmag_power: float = 0.0,
     normalise: bool = False,
     norm_factors: dict[Drive, float] | None = None,
     show_std: bool = False,
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
     include_kinetic: bool = True,
-    ke_variant: str | None = None,
     ylim: tuple[float, float] | None = None,
     figsize: tuple[float, float] | None = None,
     tight_bbox: bool = True,
@@ -68,15 +64,6 @@ def plot_transfer_theta(
         Directory to save into. Default "outputs".
     filename : str, optional
         Output filename. Defaults to ``transfer_theta[_averaged].png``.
-    div_by_bmag2 : bool, optional
-        Divide the field drives (H, S, U) by ``bmag**2``. Shorthand for
-        ``bmag_power=-2``; see :class:`~gs2ew.catalog.BmagScaling`.
-    bmag_power : float, optional
-        Multiply the field drives by ``bmag**bmag_power``. Use ``1`` to cancel
-        the ``1/bmag`` currently carried by GS2's free-energy prefactor.
-    kinetic_bmag_power : float, optional
-        Multiply the kinetic-energy transfer by ``bmag**kinetic_bmag_power``.
-        Default 0 (unchanged).
     normalise : bool, optional
         Divide each curve by its peak absolute value so the poloidal shapes can
         be compared regardless of amplitude. Default False.
@@ -91,9 +78,6 @@ def plot_transfer_theta(
         fields. None means everything present.
     include_kinetic : bool, optional
         Include the kinetic-energy transfer. Default True.
-    ke_variant : str, optional
-        Variant tag for the kinetic-energy variable name; see
-        :meth:`~gs2ew.catalog.Drive.varname`.
     ylim : tuple of float, optional
         Fixed y-limits. Movie frames pass this so the axis stays steady.
     figsize : tuple of float, optional
@@ -114,11 +98,10 @@ def plot_transfer_theta(
     ValueError
         If `ds` contains no transfer diagnostics.
     """
-    scaling = catalog.resolve_scaling(div_by_bmag2, bmag_power, kinetic_bmag_power)
     tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
 
     drives = catalog.available_drives(
-        ds, "theta", quantities, fields, include_kinetic, ke_variant
+        ds, "theta", quantities, fields, include_kinetic
     )
     if not drives:
         raise ValueError("No transfer diagnostics found in dataset.")
@@ -137,7 +120,7 @@ def plot_transfer_theta(
 
     for ax, (field, col_drives) in zip(axes[0], columns):
         for drive in col_drives:
-            da = catalog.load(ds, drive, "theta", scaling, ke_variant)
+            da = catalog.load(ds, drive, "theta")
             values = np.asarray(tw.mean(da).values)
             std = tw.std(da) if (show_std and tw.averaging) else None
             std = np.asarray(std.values) if std is not None else None
@@ -159,7 +142,7 @@ def plot_transfer_theta(
                 linewidth=1.5,
                 color=common.drive_colour(drive),
                 linestyle=common.drive_linestyle(drive),
-                label=drive.label_short(scaling),
+                label=drive.label_short(),
             )
             if std is not None:
                 ax.fill_between(
@@ -208,14 +191,10 @@ def plot_transfer_theta_movie(
     saturation_pad: float = DEFAULT_SATURATION_PAD,
     output_dir: str | Path = "outputs",
     filename: str = "transfer_theta.mp4",
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
-    kinetic_bmag_power: float = 0.0,
     normalise: bool | str = False,
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
     include_kinetic: bool = True,
-    ke_variant: str | None = None,
     stride: int = 1,
     fps: int = 10,
     crf: int = 18,
@@ -248,16 +227,15 @@ def plot_transfer_theta_movie(
     Path
         Path to the saved movie.
     """
-    scaling = catalog.resolve_scaling(div_by_bmag2, bmag_power, kinetic_bmag_power)
     indices = frame_indices(ds, tstart, window, saturation_pad, stride)
 
     drives = catalog.available_drives(
-        ds, "theta", quantities, fields, include_kinetic, ke_variant
+        ds, "theta", quantities, fields, include_kinetic
     )
     if not drives:
         raise ValueError("No transfer diagnostics found in dataset.")
 
-    values = common.frame_values(ds, drives, "theta", indices, scaling, ke_variant)
+    values = common.frame_values(ds, drives, "theta", indices)
 
     norm_mode = ("movie" if normalise == "movie" else "frame") if normalise else None
     if norm_mode is None:
@@ -281,14 +259,11 @@ def plot_transfer_theta_movie(
             tstart=float(t_values[t_index]) if window is not None else None,
             output_dir=frame_path.parent,
             filename=frame_path.name,
-            bmag_power=scaling.field_power,
-            kinetic_bmag_power=scaling.kinetic_power,
             normalise=frame_norm,
             norm_factors=norm_factors,
             quantities=quantities,
             fields=fields,
             include_kinetic=include_kinetic,
-            ke_variant=ke_variant,
             ylim=ylim,
             tight_bbox=False,
             quiet=True,

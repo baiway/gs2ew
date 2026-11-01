@@ -34,14 +34,10 @@ def plot_transfer_summary(
     saturation_pad: float = DEFAULT_SATURATION_PAD,
     output_dir: str | Path = "outputs",
     filename: str = "transfer_summary.png",
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
-    kinetic_bmag_power: float = 0.0,
     jacobian: bool = True,
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
     include_kinetic: bool = True,
-    ke_variant: str | None = None,
     show_std: bool = True,
     quiet: bool = False,
 ) -> Path:
@@ -71,11 +67,10 @@ def plot_transfer_summary(
     Path
         Path to the saved figure.
     """
-    scaling = catalog.resolve_scaling(div_by_bmag2, bmag_power, kinetic_bmag_power)
     tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
 
     drives = catalog.available_drives(
-        ds, "theta", quantities, fields, include_kinetic, ke_variant
+        ds, "theta", quantities, fields, include_kinetic
     )
     if not drives:
         raise ValueError("No transfer diagnostics found in dataset.")
@@ -89,9 +84,9 @@ def plot_transfer_summary(
         1, n_panels, figsize=(7.0 * n_panels, 4.8), squeeze=False
     )
 
-    _by_field(axes[0][0], ds, tw, drives, scaling, ke_variant, jacobian, show_std)
+    _by_field(axes[0][0], ds, tw, drives, jacobian, show_std)
     if tp_drives:
-        _by_population(axes[0][1], ds, tw, tp_drives, scaling, jacobian)
+        _by_population(axes[0][1], ds, tw, tp_drives, jacobian)
 
     if tw.title is not None:
         fig.suptitle(tw.title)
@@ -118,8 +113,6 @@ def _by_field(
     ds: xr.Dataset,
     tw,
     drives: list[Drive],
-    scaling,
-    ke_variant: str | None,
     jacobian: bool,
     show_std: bool,
 ) -> None:
@@ -149,7 +142,7 @@ def _by_field(
                 errors.append(0.0)
                 continue
             mean, std = _integrated(
-                ds, tw, catalog.load(ds, drive, "theta", scaling), jacobian
+                ds, tw, catalog.load(ds, drive, "theta"), jacobian
             )
             heights.append(mean)
             errors.append(std)
@@ -159,7 +152,7 @@ def _by_field(
                 mean, std = _integrated(
                     ds,
                     tw,
-                    catalog.load(ds, Drive(catalog.KINETIC), "theta", scaling, ke_variant),
+                    catalog.load(ds, Drive(catalog.KINETIC), "theta"),
                     jacobian,
                 )
                 heights.append(mean)
@@ -175,7 +168,7 @@ def _by_field(
             yerr=errors if show_std and tw.averaging else None,
             capsize=3,
             color=common.QUANTITY_COLOURS[quantity],
-            label=Drive(quantity, groups[0] if groups else None).label_short(scaling),
+            label=Drive(quantity, groups[0] if groups else None).label_short(),
             error_kw={"linewidth": 1.0, "ecolor": "0.3"},
         )
 
@@ -193,7 +186,6 @@ def _by_population(
     ds: xr.Dataset,
     tw,
     drives: list[Drive],
-    scaling,
     jacobian: bool,
 ) -> None:
     """Grouped bars: x = species/population, colour = quantity, hatch = trapped."""
@@ -215,7 +207,7 @@ def _by_population(
                 # carry the transfer, not which field mediates it.
                 total = 0.0
                 for drive in (d for d in drives if d.quantity == quantity):
-                    da = catalog.load(ds, drive, "trapped_passing", scaling)
+                    da = catalog.load(ds, drive, "trapped_passing")
                     da = da.isel(species=j).sel(tp=tp).sum("kxt_shift")
                     mean, _ = _integrated(ds, tw, da, jacobian)
                     total += mean
@@ -227,7 +219,7 @@ def _by_population(
             heights,
             width,
             color=common.QUANTITY_COLOURS[quantity],
-            label=Drive(quantity, "phi").label_short(scaling),
+            label=Drive(quantity, "phi").label_short(),
         )
         # Hatch the trapped bars; they alternate with passing along x.
         for k, bar in enumerate(bars):

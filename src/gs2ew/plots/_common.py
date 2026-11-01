@@ -10,7 +10,7 @@ import xarray as xr
 from matplotlib.figure import Figure
 
 from gs2ew import catalog
-from gs2ew.catalog import BmagScaling, Drive
+from gs2ew.catalog import Drive
 
 #: Fixed colour per transferred quantity, from the Okabe-Ito colourblind-safe
 #: palette. Assigned by quantity rather than taken from a cycler, so U is the
@@ -77,8 +77,6 @@ def frame_values(
     drives: list[Drive],
     reduction: str,
     indices: np.ndarray,
-    scaling: BmagScaling | None = None,
-    ke_variant: str | None = None,
     collapse: Callable[[xr.DataArray], xr.DataArray] | None = None,
 ) -> dict[Drive, np.ndarray]:
     """Instantaneous values for each drive at every frame in `indices`.
@@ -93,7 +91,7 @@ def frame_values(
     """
     out: dict[Drive, np.ndarray] = {}
     for drive in drives:
-        da = catalog.load(ds, drive, reduction, scaling, ke_variant).isel(t=indices)
+        da = catalog.load(ds, drive, reduction).isel(t=indices)
         if collapse is not None:
             da = collapse(da)
         out[drive] = np.asarray(da.values)
@@ -172,7 +170,6 @@ def heatmap_grid(
     y: np.ndarray,
     xlabel: str,
     ylabel: str,
-    scaling: BmagScaling | None = None,
     cbar_label: str = "transfer",
     vmax: float | None = None,
     share: str = "row",
@@ -254,7 +251,7 @@ def heatmap_grid(
                 shading="auto",
                 rasterized=True,
             )
-            ax.set_title(Drive(quantity, field).label(scaling), fontsize=11)
+            ax.set_title(Drive(quantity, field).label(), fontsize=11)
             if i == len(rows) - 1:
                 ax.set_xlabel(xlabel, fontsize=11)
             if j == 0:

@@ -60,13 +60,9 @@ def plot_transfer_spectral(
     saturation_pad: float = DEFAULT_SATURATION_PAD,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
-    kinetic_bmag_power: float = 0.0,
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
     include_kinetic: bool = True,
-    ke_variant: str | None = None,
     klim: float | None = None,
     vmax: float | None = None,
     tight_bbox: bool = True,
@@ -100,11 +96,10 @@ def plot_transfer_spectral(
         Path to the saved figure.
     """
     dim = _spectral_dim(reduction)
-    scaling = catalog.resolve_scaling(div_by_bmag2, bmag_power, kinetic_bmag_power)
     tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
 
     drives = catalog.available_drives(
-        ds, reduction, quantities, fields, include_kinetic, ke_variant
+        ds, reduction, quantities, fields, include_kinetic
     )
     if not drives:
         raise ValueError(f"No '{reduction}' transfer diagnostics found in dataset.")
@@ -121,7 +116,7 @@ def plot_transfer_spectral(
     panels: dict[Drive, np.ndarray] = {}
     k_values: np.ndarray | None = None
     for drive in drives:
-        da = tw.mean(catalog.load(ds, drive, reduction, scaling, ke_variant))
+        da = tw.mean(catalog.load(ds, drive, reduction))
         if klim is not None:
             da = da.sel({dim: slice(-klim, klim)})
         if k_values is None:
@@ -136,7 +131,6 @@ def plot_transfer_spectral(
         y=theta,
         xlabel=catalog.K_LABELS[dim],
         ylabel=r"$\theta$",
-        scaling=scaling,
         vmax=vmax,
     )
 
@@ -156,14 +150,10 @@ def plot_transfer_spectrum(
     saturation_pad: float = DEFAULT_SATURATION_PAD,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
-    kinetic_bmag_power: float = 0.0,
     jacobian: bool = True,
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
     include_kinetic: bool = True,
-    ke_variant: str | None = None,
     klim: float | None = None,
     ylim: tuple[float, float] | None = None,
     tight_bbox: bool = True,
@@ -189,11 +179,10 @@ def plot_transfer_spectrum(
         Path to the saved figure.
     """
     dim = _spectral_dim(reduction)
-    scaling = catalog.resolve_scaling(div_by_bmag2, bmag_power, kinetic_bmag_power)
     tw = resolve_window(ds, tstart, window, saturation_pad, quiet=quiet)
 
     drives = catalog.available_drives(
-        ds, reduction, quantities, fields, include_kinetic, ke_variant
+        ds, reduction, quantities, fields, include_kinetic
     )
     if not drives:
         raise ValueError(f"No '{reduction}' transfer diagnostics found in dataset.")
@@ -211,7 +200,7 @@ def plot_transfer_spectrum(
 
     for ax, (field, col_drives) in zip(axes[0], columns):
         for drive in col_drives:
-            da = catalog.load(ds, drive, reduction, scaling, ke_variant)
+            da = catalog.load(ds, drive, reduction)
             spectrum = theta_integral(tw.mean(da), ds, jacobian=jacobian)
             if klim is not None:
                 spectrum = spectrum.sel({dim: slice(-klim, klim)})
@@ -221,7 +210,7 @@ def plot_transfer_spectrum(
                 linewidth=1.5,
                 color=common.drive_colour(drive),
                 linestyle=common.drive_linestyle(drive),
-                label=drive.label_short(scaling),
+                label=drive.label_short(),
             )
 
         if field is not None:
@@ -257,13 +246,9 @@ def plot_transfer_spectral_movie(
     saturation_pad: float = DEFAULT_SATURATION_PAD,
     output_dir: str | Path = "outputs",
     filename: str | None = None,
-    div_by_bmag2: bool = False,
-    bmag_power: float | None = None,
-    kinetic_bmag_power: float = 0.0,
     quantities: list[str] | None = None,
     fields: list[str] | None = None,
     include_kinetic: bool = True,
-    ke_variant: str | None = None,
     klim: float | None = None,
     stride: int = 1,
     fps: int = 10,
@@ -281,11 +266,10 @@ def plot_transfer_spectral_movie(
     :func:`gs2ew.plots.transfer_theta.plot_transfer_theta_movie`.
     """
     dim = _spectral_dim(reduction)
-    scaling = catalog.resolve_scaling(div_by_bmag2, bmag_power, kinetic_bmag_power)
     indices = frame_indices(ds, tstart, window, saturation_pad, stride)
 
     drives = catalog.available_drives(
-        ds, reduction, quantities, fields, include_kinetic, ke_variant
+        ds, reduction, quantities, fields, include_kinetic
     )
     if not drives:
         raise ValueError(f"No '{reduction}' transfer diagnostics found in dataset.")
@@ -295,7 +279,7 @@ def plot_transfer_spectral_movie(
 
     clip = (lambda da: da.sel({dim: slice(-klim, klim)})) if klim is not None else None
     values = common.frame_values(
-        ds, drives, reduction, indices, scaling, ke_variant, collapse=clip
+        ds, drives, reduction, indices, collapse=clip
     )
     vmax = common.symmetric_limit(*values.values())
 
@@ -310,12 +294,9 @@ def plot_transfer_spectral_movie(
             tstart=float(t_values[t_index]) if window is not None else None,
             output_dir=frame_path.parent,
             filename=frame_path.name,
-            bmag_power=scaling.field_power,
-            kinetic_bmag_power=scaling.kinetic_power,
             quantities=quantities,
             fields=fields,
             include_kinetic=include_kinetic,
-            ke_variant=ke_variant,
             klim=klim,
             vmax=vmax,
             tight_bbox=False,

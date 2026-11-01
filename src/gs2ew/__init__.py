@@ -18,7 +18,7 @@ Layout:
 * :mod:`gs2ew.plots` — the plotting routines themselves
 """
 
-from gs2ew.catalog import BmagScaling, Drive, available_drives, identity_residual
+from gs2ew.catalog import Drive, available_drives, identity_residual
 from gs2ew.geometry import theta_integral
 from gs2ew.io import detect_saturation_time, load_gs2_output
 from gs2ew.metadata import get_metadata, get_version, requires_version
@@ -47,7 +47,6 @@ from gs2ew.timebase import TimeWindow, frame_indices, resolve_window
 
 __all__ = [
     # Core
-    "BmagScaling",
     "Drive",
     "TimeWindow",
     "available_drives",

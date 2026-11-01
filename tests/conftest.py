@@ -32,7 +32,6 @@ def make_dataset(
     reductions: tuple[str, ...] = ("theta", "kxsource", "kxtarget", "kysource"),
     trapped_passing: bool = True,
     kinetic: bool = True,
-    ke_variant: str | None = None,
     nt: int = 24,
     ntheta: int = 9,
     nk: int = 7,
@@ -100,11 +99,10 @@ def make_dataset(
                 data[f"{stem}_transfer_{field}_trapped_passing"] = (dims, values)
 
     if kinetic:
-        tag = f"_{ke_variant}" if ke_variant else ""
         for reduction in reductions:
             suffix, dim = catalog.REDUCTIONS[reduction]
             dims = ("t", "theta") if dim is None else ("t", "theta", dim)
-            data[f"kinetic_energy_transfer{tag}_theta{suffix}"] = (
+            data[f"kinetic_energy_transfer_theta{suffix}"] = (
                 dims,
                 rng.normal(size=tuple(len(coords[d]) for d in dims)),
             )

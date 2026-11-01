@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from gs2ew import catalog
-from gs2ew.catalog import BmagScaling, Drive
+from gs2ew.catalog import Drive
 
 from conftest import make_dataset
 
@@ -27,13 +26,6 @@ class TestVarname:
         assert Drive("KE").varname() == "kinetic_energy_transfer_theta"
         assert (
             Drive("KE").varname("kysource") == "kinetic_energy_transfer_theta_kysource"
-        )
-
-    def test_kinetic_variant(self):
-        """GS2's prefactor-comparison branch writes new/old variants."""
-        assert (
-            Drive("KE").varname("theta", ke_variant="new")
-            == "kinetic_energy_transfer_new_theta"
         )
 
     def test_kinetic_has_no_trapped_passing(self):
@@ -70,11 +62,6 @@ class TestAvailableDrives:
         empty = make_dataset(fields=(), kinetic=False, trapped_passing=False)
         assert catalog.available_drives(empty) == []
 
-    def test_variant_lookup(self):
-        variant_ds = make_dataset(ke_variant="new")
-        assert Drive("KE") not in catalog.available_drives(variant_ds)
-        assert Drive("KE") in catalog.available_drives(variant_ds, ke_variant="new")
-
 
 class TestFieldColumns:
     def test_kinetic_joins_phi_column(self, ds):
@@ -94,40 +81,6 @@ class TestLabels:
 
     def test_short_label_drops_the_field(self):
         assert Drive("H", "bpar").label_short() == r"$N_\mathbf{k}^{H}$"
-
-    def test_kinetic_label_ignores_field_scaling(self):
-        scaling = BmagScaling(field_power=1.0)
-        assert Drive("KE").label(scaling) == catalog.KINETIC_LABEL
-
-    @pytest.mark.parametrize(
-        "power, expected",
-        [(1, "B_0"), (-1, "/B_0"), (2, "B_0^{2}"), (-2, "/B_0^{2}")],
-    )
-    def test_bmag_suffix(self, power, expected):
-        label = Drive("U", "phi").label(BmagScaling(field_power=power))
-        assert label.endswith(expected + "$")
-
-
-class TestScaling:
-    def test_div_by_bmag2_is_shorthand(self):
-        assert catalog.resolve_scaling(div_by_bmag2=True).field_power == -2
-
-    def test_explicit_power(self):
-        scaling = catalog.resolve_scaling(bmag_power=1, kinetic_bmag_power=-2)
-        assert (scaling.field_power, scaling.kinetic_power) == (1, -2)
-
-    def test_conflicting_options_rejected(self):
-        with pytest.raises(ValueError, match="not both"):
-            catalog.resolve_scaling(div_by_bmag2=True, bmag_power=1)
-
-    def test_applied_to_fields_only(self, ds):
-        scaling = catalog.resolve_scaling(bmag_power=1)
-        scaled = catalog.load(ds, Drive("U", "phi"), scaling=scaling)
-        raw = catalog.load(ds, Drive("U", "phi"))
-        assert np.allclose((scaled / raw).values, ds["bmag"].values)
-
-        ke_scaled = catalog.load(ds, Drive("KE"), scaling=scaling)
-        assert (ke_scaled.values == catalog.load(ds, Drive("KE")).values).all()
 
 
 class TestIdentity:

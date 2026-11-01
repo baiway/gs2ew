@@ -33,8 +33,6 @@ class TestTransferTheta:
     @pytest.mark.parametrize("kwargs", [
         {"show_std": True, "window": 30.0},
         {"normalise": True},
-        {"div_by_bmag2": True},
-        {"bmag_power": 1, "kinetic_bmag_power": -2},
         {"quantities": ["U"]},
         {"fields": ["apar"]},
         {"include_kinetic": False},

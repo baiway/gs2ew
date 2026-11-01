@@ -67,14 +67,6 @@ with xr.open_dataset("run.out.nc") as ds:
 [`examples/analysis.py`](examples/analysis.py) is a template deck covering every
 plot; copy it and comment out what you don't want.
 
-[`examples/bmag_scan.py`](examples/bmag_scan.py) is a standalone, executable
-script with an editable configuration block at the top. It renders one plot set
-per `bmag` power plus a shape-comparison overlay:
-
-```bash
-uv run examples/bmag_scan.py run.out.nc outputs/scan --bmag-powers -1 0 1
-```
-
 ## Transfer diagnostics
 
 GS2's `diagnostics_free_energy_transfer` module writes the nonlinear drive of
@@ -145,33 +137,12 @@ saturation time itself is usually still too early to average from.
 
 Movies default `tstart` to `"saturation"` rather than the last timestep.
 
-### `bmag` scaling
-
-Scratch machinery for an ongoing investigation into which powers of $B_0$
-belong in the GS2 prefactors. The field drives currently carry a `1/bmag` from
-`diagnostics_free_energy_transfer`; the kinetic-energy transfer carries
-`1/bmag**2` from `diagnostics_kinetic_energy_transfer`. What is certain is that
-the two differ by `bmag**2`.
-
-- `bmag_power=p` multiplies H, S and U by `bmag**p` — use `1` to cancel the
-  `1/bmag` in the current free-energy prefactor.
-- `kinetic_bmag_power=p` does the same to the kinetic-energy transfer,
-  independently.
-- `div_by_bmag2=True` is shorthand for `bmag_power=-2`.
-
-Any applied power is shown in the plot labels (e.g. $N_\mathbf{k}^{U}B_0$).
-**This will be removed once the prefactors are settled upstream.**
-
 ### Targeted GS2 version
 
 The `fix/kinetic-energy-transfer-prefactor` branch, which writes
 `kinetic_energy_transfer_theta`. The sign error that earlier versions of this
 package corrected on the analysis side was fixed upstream in `6ce9ef660`, so
 there is no longer any sign correction here.
-
-`experimental/compare-KE-transfer-prefactors` writes both
-`kinetic_energy_transfer_new_*` and `..._old_*`; pass `ke_variant="new"` (or
-`--ke-variant new`) to read those.
 
 ## Development
 
