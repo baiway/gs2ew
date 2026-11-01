@@ -236,6 +236,11 @@ class TestReplot:
         # The input deck comes along to the new directory.
         assert (out / "cbc.in").read_text() == SYNTHETIC_DECK
 
+    def test_unknown_override_names_the_options(self, made):
+        _, nc = made
+        with pytest.raises(ValueError, match="no render option klim; it has figsize, normalise"):
+            bundle.replot(nc, klim=0.5, quiet=True)
+
     def test_new_bundle_listed_in_reproduce_script(self, made):
         _, nc = made
         bundle.replot(nc, filename="linear.png", normalise=True, quiet=True)

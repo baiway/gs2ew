@@ -31,6 +31,7 @@ listing the exact, pinned command for every bundle in it; see
 
 from __future__ import annotations
 
+import inspect
 import json
 import shlex
 import sys
@@ -425,15 +426,28 @@ def replot(
     identical to the original.
 
     `render_overrides` replace the recorded render options (e.g.
-    ``normalise=True``). Since the recipe in the original bundle would then no
-    longer describe the figure, a bundle with the updated recipe is written
-    alongside the new figure, so every figure keeps a bundle that describes it
-    exactly.
+    ``normalise=True``); the plot's ``render_<plot>`` function lists them.
+    Since the recipe in the original bundle would then no longer describe the
+    figure, a bundle with the updated recipe is written alongside the new
+    figure, so every figure keeps a bundle that describes it exactly.
+
+    Raises
+    ------
+    ValueError
+        If a render override is not an option of this plot.
     """
     path = Path(path)
     bundle = read_bundle(path)
     spec = get_spec(bundle.attrs["gs2ew_plot"])
     rec = recipe(bundle)
+
+    known = set(inspect.signature(spec.render).parameters) - {"reduced"}
+    unknown = set(render_overrides) - known
+    if unknown:
+        raise ValueError(
+            f"{spec.name} has no render option {', '.join(sorted(unknown))}; "
+            f"it has {', '.join(sorted(known)) or 'none'}."
+        )
 
     render_options = {**rec["render"], **render_overrides}
     save = rec["save"]

@@ -445,7 +445,10 @@ def cmd_replot(args: argparse.Namespace) -> int:
     """Redraw figures from their bundles, without the raw output."""
     overrides = dict(args.set or [])
     for path in args.bundles:
-        bundle.replot(path, output_dir=args.output_dir, **overrides)
+        try:
+            bundle.replot(path, output_dir=args.output_dir, **overrides)
+        except ValueError as exc:
+            raise SystemExit(f"gs2ew: {path}: {exc}") from None
     return 0
 
 

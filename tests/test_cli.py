@@ -134,6 +134,12 @@ class TestReplotAndReproduce:
         render = bundle.recipe(bundle.read_bundle(out / nc.name))["render"]
         assert render["normalise"] is True and render["ylim"] == [-1.1, 1.1]
 
+    def test_unknown_override(self, run):
+        cli.main(["plot", str(run), *PILOT])
+        nc = run / "gs2ew" / "fields_by_mode.nc"
+        with pytest.raises(SystemExit, match="fields_by_mode has no render option normalise"):
+            cli.main(["replot", str(nc), "--set", "normalise=true"])
+
     def test_bad_override(self, run):
         with pytest.raises(SystemExit):
             cli.main(["replot", "x.nc", "--set", "normalise"])
