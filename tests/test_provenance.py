@@ -184,6 +184,21 @@ class TestInputDeck:
         assert not provenance.deck_matches(provenance.input_deck(ds), deck)
 
 
+    def test_restarted_file_on_disk(self, ds, tmp_path):
+        deck = tmp_path / "run.in"
+        deck.write_text(
+            SYNTHETIC_DECK.replace("nstep = 1000", "nstep = 1000\n delt_option = 'check_restart'")
+            + "&init_g_knobs\n ginit_option = 'many'\n/\n"
+        )
+        assert not provenance.deck_matches(provenance.input_deck(ds), deck)
+        assert provenance.deck_restarted(provenance.input_deck(ds), deck)
+
+    def test_edited_is_not_restarted(self, ds, tmp_path):
+        deck = tmp_path / "run.in"
+        deck.write_text(SYNTHETIC_DECK.replace("nstep = 1000", "nstep = 2000"))
+        assert not provenance.deck_restarted(provenance.input_deck(ds), deck)
+
+
 class TestSourceIdentity:
     def test_from_file(self, ds, tmp_path):
         path = tmp_path / "run.out.nc"

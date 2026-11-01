@@ -316,6 +316,11 @@ def _input_deck(ds: xr.Dataset) -> tuple[str | None, str]:
                 f"{on_disk.name} from the run directory, verified against the "
                 "deck embedded in the GS2 output",
             )
+        if provenance.deck_restarted(deck, on_disk):
+            return deck, (
+                f"embedded in the GS2 output ({on_disk.name} in the run directory "
+                "has since been set to restart)"
+            )
         if on_disk not in _deck_warned:
             _deck_warned.add(on_disk)
             print(

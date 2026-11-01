@@ -7,7 +7,7 @@ Six subcommands::
     gs2ew batch project/                   # every .out.nc under a directory
     gs2ew replot    RUN/gs2ew/*.nc         # redraw figures from their bundles
     gs2ew reproduce RUN/gs2ew/*.nc         # repeat the analysis from raw output
-    gs2ew scan write|submit|status ...     # write and run a parameter scan
+    gs2ew scan write|submit|restart|status # write and run a parameter scan
 
 RUN is a run directory holding one ``.out.nc``, or the ``.out.nc`` itself.
 `plot` and `batch` take the same options, so a batch job produces exactly what
@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import sys
 from collections.abc import Callable
 from functools import partial
@@ -569,7 +571,9 @@ def cmd_scan_write(args: argparse.Namespace) -> int:
     points = SCAN_MODES[args.mode](dict(args.vary))
     machine = None if args.machine == "none" else args.machine
     try:
-        run_dirs = scan.write(args.template, points, args.directory, machine=machine)
+        run_dirs = scan.write(
+            args.template, points, args.directory, machine=machine, ingen=args.ingen
+        )
     except (FileExistsError, ValueError) as exc:
         raise SystemExit(f"gs2ew: {exc}") from None
     for run_dir in run_dirs:
@@ -579,18 +583,23 @@ def cmd_scan_write(args: argparse.Namespace) -> int:
 
 
 def cmd_scan_submit(args: argparse.Namespace) -> int:
-    """Submit the runs of a scan that have not been yet."""
+    """Submit the runs of a scan that have not been yet, or restart them."""
     sbatch_args = args.sbatch_args
     if sbatch_args and sbatch_args[0] == "--":
         sbatch_args = sbatch_args[1:]
+    options = dict(dry_run=args.dry_run, check_cores=not args.no_core_check)
     try:
-        outcomes = scan.submit(args.directory, sbatch_args, dry_run=args.dry_run)
+        if args.scan_command == "restart":
+            outcomes = scan.restart(args.directory, args.runs, sbatch_args, **options)
+        else:
+            outcomes = scan.submit(args.directory, sbatch_args, **options)
     except (FileNotFoundError, ValueError) as exc:
         raise SystemExit(f"gs2ew: {exc}") from None
     width = max((len(name) for name, _ in outcomes), default=0)
     for name, outcome in outcomes:
         print(f"{name:<{width}}  {outcome}")
-    return 1 if any(o.startswith("sbatch failed") for _, o in outcomes) else 0
+    failed = ("sbatch failed", "cannot restart")
+    return 1 if any(o.startswith(failed) for _, o in outcomes) else 0
 
 
 def cmd_scan_status(args: argparse.Namespace) -> int:
@@ -696,22 +705,48 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"the Slurm template to copy into each run: {', '.join(scan.machines())}, "
         "a file of your own, or none (default: archer2)",
     )
+    write.add_argument(
+        "--ingen",
+        default=os.environ.get("GS2_INGEN") or shutil.which("ingen"),
+        help="GS2's ingen, for each run's exact grid sizes when checking core "
+        "counts (default: $GS2_INGEN, or ingen on PATH)",
+    )
     write.set_defaults(func=cmd_scan_write)
 
     submit = scan_sub.add_parser(
         "submit", help="sbatch every run without output or a job yet"
     )
-    submit.add_argument("directory", help="the scan directory")
-    submit.add_argument(
-        "--dry-run", action="store_true", help="print the sbatch commands without running them"
+    restart = scan_sub.add_parser(
+        "restart",
+        help="restart the runs GS2 stopped at avail_cpu_time, or those named",
     )
-    submit.add_argument(
-        "sbatch_args",
-        nargs="*",
-        metavar="-- SBATCH_ARGS",
-        help="options for sbatch, after --, e.g. -- --time=02:00:00 --nodes=2",
+    restart.add_argument(
+        "--runs",
+        nargs="+",
+        default=None,
+        metavar="RUN",
+        help="restart these runs, whatever stopped them",
     )
-    submit.set_defaults(func=cmd_scan_submit)
+    for subparser in (submit, restart):
+        subparser.add_argument("directory", help="the scan directory")
+        subparser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="print the sbatch commands without running them or changing anything",
+        )
+        subparser.add_argument(
+            "--no-core-check",
+            action="store_true",
+            help="use the core count asked for even if the transfer diagnostics "
+            "can't, rather than the largest below it they can",
+        )
+        subparser.add_argument(
+            "sbatch_args",
+            nargs="*",
+            metavar="-- SBATCH_ARGS",
+            help="options for sbatch, after --, e.g. -- --time=02:00:00 --nodes=2",
+        )
+        subparser.set_defaults(func=cmd_scan_submit)
 
     status = scan_sub.add_parser("status", help="where each run of a scan has got to")
     status.add_argument("directory", help="the scan directory")

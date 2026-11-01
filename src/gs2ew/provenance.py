@@ -22,6 +22,7 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+import f90nml
 import numpy as np
 import xarray as xr
 
@@ -271,6 +272,40 @@ def deck_matches(embedded: str, path: str | Path) -> bool:
     return _normalise_deck(embedded) == _normalise_deck(Path(path).read_text())
 
 
+#: Input settings that only say how a run starts, which a restart changes in
+#: the input file in place (see :func:`gs2ew.scan.restart`). GS2 keeps the
+#: first deck in an output it appends to, so these are the only differences
+#: a restarted run's input file should show.
+RESTART_KEYS = frozenset(
+    {
+        "init_g_knobs.ginit_option",
+        "gs2_diagnostics_knobs.append_old",
+        "knobs.delt_option",
+        "fields_knobs.read_response",
+    }
+)
+
+
+def deck_restarted(embedded: str, path: str | Path) -> bool:
+    """Whether the input file at `path` is the deck embedded in the output
+    with only its :data:`RESTART_KEYS` changed: the run has been restarted."""
+    try:
+        first = f90nml.reads("\n".join(_normalise_deck(embedded)))
+        now = f90nml.read(str(path))
+    except (ValueError, IndexError, StopIteration):  # not a namelist f90nml can read
+        return False
+
+    def settings(deck: f90nml.Namelist) -> dict[str, object]:
+        return {
+            f"{group}.{key}": value
+            for group in deck
+            for key, value in deck[group].items()
+            if f"{group}.{key}" not in RESTART_KEYS
+        }
+
+    return settings(first) == settings(now)
+
+
 def source_identity(ds: xr.Dataset) -> dict[str, str]:
     """What identifies the GS2 output `ds` was read from.
 
@@ -308,5 +343,7 @@ __all__ = [
     "dependency_versions",
     "input_deck",
     "deck_matches",
+    "RESTART_KEYS",
+    "deck_restarted",
     "source_identity",
 ]

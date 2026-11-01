@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import stat
+import time
+from pathlib import Path
 
 import f90nml
 import pytest
@@ -201,10 +203,16 @@ class TestWrite:
 
 
 class TestWarnings:
-    def test_read_response(self, template, tmp_path, capsys):
+    def test_read_response_is_fine(self, template, tmp_path, capsys):
+        """GS2 calculates the response matrices if it can't read them."""
         template.write_text(TEMPLATE.replace("read_response = .false.", "read_response = .true."))
         scan.write(template, [{"nx": 256}], tmp_path / "scan")
-        assert "read_response" in capsys.readouterr().out
+        assert "Warning" not in capsys.readouterr().out
+
+    def test_restart_in_template(self, template, tmp_path, capsys):
+        template.write_text(TEMPLATE.replace('restart_dir = "restart"', "ginit_option = 'many'"))
+        scan.write(template, [{"nx": 256}], tmp_path / "scan")
+        assert "ginit_option" in capsys.readouterr().out
 
     def test_beta_without_auto_set_beta_prime(self, template, tmp_path, capsys):
         scan.write(template, [{"beta": 0.01}], tmp_path / "scan")
@@ -315,22 +323,314 @@ def test_slurm_time_limits(text, seconds):
     assert scan._slurm_seconds(text) == seconds
 
 
+def set_mtime(path, offset):
+    """Make `path` look written `offset` seconds from now."""
+    when = time.time() + offset
+    os.utime(path, (when, when))
+
+
 def test_status(template, tmp_path, slurm):
     directory = tmp_path / "scan"
-    scan.write(template, scan.product({"nx": [128, 192, 256, 384]}), directory)
-    scan.submit(directory)  # jobs 1001, 1002, 1003, 1004
-    (directory / "nx_192" / "nx_192.exit_reason").write_text(
-        " -1 GS2 internal time limit exceeded.\n  1 nstep timesteps completed.\n"
-    )
+    scan.write(template, scan.product({"nx": [128, 192, 256, 384, 512]}), directory)
+    scan.submit(directory)  # jobs 1001 to 1005; squeue has 1001 running
+    reasons = {
+        "nx_192": " -1 GS2 internal time limit exceeded.\n  1 nstep timesteps completed.\n",
+        "nx_256": "  1 nstep timesteps completed.\n",
+        "nx_384": "  1 nstep timesteps completed.\n",
+    }
+    for name, text in reasons.items():
+        path = directory / name / f"{name}.exit_reason"
+        path.write_text(text)
+        set_mtime(path, 10)
+    # From before the latest job, as after a restart.
+    set_mtime(directory / "nx_384" / "nx_384.exit_reason", -3600)
     (directory / "jobs.csv").write_text(
-        "run,job,submitted\nnx_128,1001,x\nnx_192,1002,x\nnx_256,1003,x\n"
+        "\n".join(scan_jobs_csv(directory).splitlines()[:-1]) + "\n"
     )
+
     assert scan.status(directory) == [
         ("nx_128", "job 1001: running"),
-        ("nx_192", "finished: -1 GS2 internal time limit exceeded.; 1 nstep timesteps completed."),
-        ("nx_256", "job 1003: ended without an exit reason"),
-        ("nx_384", "not submitted"),
+        (
+            "nx_192",
+            (
+                "finished: GS2 internal time limit exceeded.; nstep timesteps completed. "
+                "(can be restarted)"
+            ),
+        ),
+        ("nx_256", "finished: nstep timesteps completed."),
+        ("nx_384", "job 1004: ended without an exit reason"),
+        ("nx_512", "not submitted"),
     ]
+
+
+def scan_jobs_csv(directory):
+    return (directory / scan.JOBS).read_text()
+
+
+#: A template that writes the transfer diagnostics and saves for restarts,
+#: with nlambda = 15 + 64/2 + 1 = 48, negrid = 16 and nspec = 2: so a core
+#: count must divide 1536.
+TRANSFER_TEMPLATE = TEMPLATE.replace(
+    "read_response = .false.", "read_response = .false.\n  dump_response = .true."
+) + """\
+&nonlinear_terms_knobs
+  nonlinear_mode = 'on'
+/
+&gs2_diagnostics_knobs
+  save_for_restart = .true.
+  write_free_energy_transfer = .true.
+/
+&le_grids_knobs
+  npassing = 15
+  negrid = 16
+/
+&layouts_knobs
+  layout = 'xyles'
+/
+&species_knobs
+  nspec = 2
+/
+"""
+
+
+@pytest.fixture
+def transfer_template(tmp_path):
+    path = tmp_path / "transfer.in"
+    path.write_text(TRANSFER_TEMPLATE)
+    return path
+
+
+#: The layout sizes of TRANSFER_TEMPLATE.
+SIZES = {"x": 127, "y": 43, "l": 48, "e": 16, "s": 2}
+
+
+class TestCores:
+    @pytest.mark.parametrize("cores", [1, 2, 4, 8, 96, 768, 1536])
+    def test_whole_planes(self, cores):
+        assert scan._planes_whole("xyles", SIZES, cores)
+
+    @pytest.mark.parametrize("cores", [5, 7, 640, 1000, 3072])
+    def test_split_planes(self, cores):
+        """640 = 2 * 16 * 20 splits nlambda unevenly, so cuts through planes."""
+        assert not scan._planes_whole("xyles", SIZES, cores)
+
+    def test_other_layouts_split_outside_kx_ky(self):
+        # In lxyes, kx and ky sit inside negrid and nspec only.
+        assert scan._planes_whole("lxyes", SIZES, 32)
+        assert not scan._planes_whole("lxyes", SIZES, 48)
+
+    def test_sweetspots_split_each_dimension_evenly(self):
+        """As ingen lists them for nlambda = 48, negrid = 16, nspec = 2."""
+        spots = [c for c in range(1, 1537) if scan._splits_evenly("xyles", SIZES, c)]
+        assert spots == [
+            1, 2, 4, 8, 16, 32, 64, 96, 128, 192, 256, 384, 512, 768, 1536
+        ]
+
+    def test_sweetspots_from_the_report(self, tmp_path):
+        report = tmp_path / "run.report"
+        report.write_text(
+            "Mixed kx*ky sweetspots (note these are often not recommended:)\n"
+            "  npe =      512  (l)\n  npe =      3  (l)\n"
+            "xxf sweetspot #proc up to:  100000\n"
+            "  npe =        1  (s)\n  npe =      512  (l)\n  npe =      768  (l)\n"
+            "yxf sweetspot #proc up to:  100000\n"
+            "  npe =        1  (s)\n  npe =      768  (l)\n"
+            "\nCollisions using le_lo\n#proc sweetspots for le_lo, up to:  100000\n"
+            "  npe =       86  (y)\n"
+        )
+        assert scan._sweetspots(report) == {1, 768}
+
+    def test_prefers_sweetspots(self, transfer_template, tmp_path, slurm):
+        directory = tmp_path / "scan"
+        scan.write(transfer_template, [{"nx": 256}], directory, machine="viking")
+        # 48 divides 1536, keeping the planes whole, but isn't a sweetspot.
+        assert scan.submit(directory, ["--ntasks=48"])[0][1] == (
+            "job 1001 on 32 cores, as 48 cores doesn't split GS2's layout evenly "
+            "(a sweetspot)"
+        )
+
+    def test_linear_runs_need_no_sweetspot(self, transfer_template, tmp_path, slurm):
+        transfer_template.write_text(TRANSFER_TEMPLATE.replace("'on'", "'off'"))
+        directory = tmp_path / "scan"
+        scan.write(transfer_template, [{"nx": 256}], directory, machine="viking")
+        assert scan.submit(directory, ["--ntasks=48"])[0][1] == "job 1001"
+
+    def test_sizes_from_the_input(self):
+        layout, sizes, exact = scan._layout_sizes(
+            f90nml.reads(TRANSFER_TEMPLATE), Path("absent.report")
+        )
+        assert (layout, exact) == ("xyles", False)
+        assert sizes == SIZES
+
+    def test_sizes_from_the_report(self, tmp_path):
+        report = tmp_path / "run.report"
+        report.write_text(
+            "            ntgrid=          32\n           nlambda=          46\n"
+            "            negrid=          16\n           ntheta0=         127\n"
+            "              naky=          43\n             nspec=           2\n"
+            "\nLayout = xyles\n"
+        )
+        _, sizes, exact = scan._layout_sizes(f90nml.reads(TRANSFER_TEMPLATE), report)
+        assert exact
+        assert sizes["l"] == 46
+
+    def test_chooses_a_count_that_keeps_planes_whole(
+        self, transfer_template, tmp_path, slurm
+    ):
+        directory = tmp_path / "scan"
+        # ntheta = 96 gives nlambda = 64: 2048, which 768 doesn't divide.
+        scan.write(transfer_template, scan.one_at_a_time({"ntheta": [96]}), directory)
+        outcomes = dict(scan.submit(directory))
+        assert outcomes["base"] == "job 1001"
+        assert outcomes["ntheta_96"] == (
+            "job 1002 on 512 cores (4 nodes), as 768 cores would split the (kx, ky) "
+            "planes the transfer diagnostics need, not dividing nlambda * negrid * "
+            "nspec = 2048, estimating nlambda as 64"
+        )
+        submitted = slurm.read_text().splitlines()[1]
+        assert "--nodes=4 --ntasks-per-node=128 job.slurm" in submitted
+        assert scan._read_jobs(directory)["ntheta_96"]["cores"] == "512"
+
+    def test_asking_for_fewer_cores_is_a_ceiling(self, transfer_template, tmp_path, slurm):
+        directory = tmp_path / "scan"
+        scan.write(transfer_template, [{"ntheta": 96}], directory)
+        scan.submit(directory, ["--nodes", "3", "--time=02:00:00"])
+        # 384 doesn't divide 2048 either; 256 does.
+        assert slurm.read_text().split(" --parsable ")[1] == (
+            "--job-name=scan-ntheta_96 --time=02:00:00 --nodes=2 "
+            "--ntasks-per-node=128 job.slurm ntheta_96.in\n"
+        )
+
+    def test_by_task_count(self, transfer_template, tmp_path, slurm):
+        directory = tmp_path / "scan"
+        # Viking asks for 512 tasks; ntheta = 48 gives 40 * 16 * 2 = 1280.
+        scan.write(transfer_template, [{"ntheta": 48}], directory, machine="viking")
+        assert scan.submit(directory)[0][1].startswith("job 1001 on 320 cores, as 512")
+        assert "--ntasks=320 job.slurm" in slurm.read_text()
+
+    def test_uneven_nodes(self):
+        options = {"nodes": "6", "ntasks-per-node": "128"}
+        assert scan._resource_args(704, 128, options) == (
+            ["--nodes=8", "--ntasks-per-node=88"],
+            "704 cores (8 nodes of 88)",
+        )
+        assert scan._resource_args(512, 128, {**options, "ntasks": "768"})[0] == [
+            "--nodes=4", "--ntasks-per-node=128", "--ntasks=512"
+        ]
+
+    def test_check_can_be_skipped(self, transfer_template, tmp_path, slurm):
+        directory = tmp_path / "scan"
+        scan.write(transfer_template, [{"ntheta": 96}], directory)
+        assert scan.submit(directory, check_cores=False) == [("ntheta_96", "job 1001")]
+
+    def test_only_with_transfer_diagnostics(self, template, tmp_path, slurm):
+        directory = tmp_path / "scan"
+        scan.write(template, [{"ntheta": 96}], directory)
+        assert scan.submit(directory, ["--ntasks=7"]) == [("ntheta_96", "job 1001")]
+
+    def test_cores_are_recorded(self, transfer_template, tmp_path, slurm):
+        directory = tmp_path / "scan"
+        scan.write(transfer_template, [{"nx": 256}], directory, machine="viking")
+        scan.submit(directory)
+        assert scan._read_jobs(directory)["nx_256"]["cores"] == "512"
+
+
+class TestRestart:
+    @pytest.fixture
+    def stopped(self, transfer_template, tmp_path, slurm):
+        """A scan whose two runs stopped at their time limit, with restart files."""
+        directory = tmp_path / "scan"
+        scan.write(transfer_template, scan.product({"nx": [128, 256]}), directory)
+        scan.submit(directory)  # jobs 1001 (still "running" in squeue) and 1002
+        (directory / "jobs.csv").write_text(
+            scan_jobs_csv(directory).replace("nx_128,1001", "nx_128,999")
+        )
+        for name in ("nx_128", "nx_256"):
+            (directory / name / "restart" / f"{name}.nc").touch()
+            reason = directory / name / f"{name}.exit_reason"
+            reason.write_text(" -1 GS2 internal time limit exceeded.\n")
+            set_mtime(reason, 10)
+        return directory
+
+    def test_restarts_runs_stopped_at_their_time_limit(self, stopped, slurm):
+        assert scan.restart(stopped) == [("nx_128", "job 1003"), ("nx_256", "job 1004")]
+        deck = f90nml.read(stopped / "nx_128" / "nx_128.in")
+        assert deck["init_g_knobs"]["ginit_option"] == "many"
+        assert deck["gs2_diagnostics_knobs"]["append_old"] is True
+        assert deck["knobs"]["delt_option"] == "check_restart"
+        assert deck["fields_knobs"]["read_response"] is True
+        assert scan._read_jobs(stopped)["nx_128"]["job"] == "1003"
+        # Nothing else changed.
+        assert changes(stopped / "template.in", stopped / "nx_128" / "nx_128.in").keys() == {
+            "kt_grids_box_parameters.nx",
+            "init_g_knobs.ginit_option",
+            "gs2_diagnostics_knobs.append_old",
+            "knobs.delt_option",
+            "fields_knobs.read_response",
+        }
+
+    def test_restarted_runs_are_running_again(self, stopped, slurm):
+        scan.restart(stopped)
+        for name in ("nx_128", "nx_256"):
+            set_mtime(stopped / name / f"{name}.exit_reason", -3600)
+        assert scan.status(stopped)[1] == ("nx_256", "job 1004: ended without an exit reason")
+
+    def test_skips_finished_and_queued_runs(self, stopped, slurm):
+        (stopped / "nx_256" / "nx_256.exit_reason").write_text("  1 nstep timesteps completed.\n")
+        set_mtime(stopped / "nx_256" / "nx_256.exit_reason", 10)
+        (stopped / "jobs.csv").write_text(
+            scan_jobs_csv(stopped).replace("nx_128,999", "nx_128,1001")
+        )
+        assert scan.restart(stopped) == [
+            ("nx_128", "skipped: job 1001 is running"),
+            ("nx_256", "skipped: nstep timesteps completed."),
+        ]
+
+    def test_named_runs_whatever_stopped_them(self, stopped, slurm):
+        (stopped / "nx_256" / "nx_256.exit_reason").unlink()
+        assert scan.restart(stopped, runs=["nx_256"]) == [("nx_256", "job 1003")]
+
+    def test_unknown_run(self, stopped):
+        with pytest.raises(ValueError, match="nx_999"):
+            scan.restart(stopped, runs=["nx_999"])
+
+    def test_needs_restart_files(self, stopped, slurm):
+        (stopped / "nx_128" / "restart" / "nx_128.nc").unlink()
+        assert dict(scan.restart(stopped))["nx_128"] == (
+            "cannot restart: no restart files nx_128.nc* in restart/"
+        )
+
+    def test_needs_save_for_restart(self, stopped, slurm):
+        path = stopped / "nx_128" / "nx_128.in"
+        path.write_text(path.read_text().replace("save_for_restart = .true.", ""))
+        assert dict(scan.restart(stopped))["nx_128"].startswith(
+            "cannot restart: it doesn't set save_for_restart"
+        )
+
+    def test_reuses_the_core_count(self, stopped, slurm):
+        path = stopped / "jobs.csv"
+        path.write_text(path.read_text().replace(",768\n", ",512\n"))
+        scan.restart(stopped)
+        restarts = slurm.read_text().splitlines()[2:]
+        assert all("--nodes=4 --ntasks-per-node=128 job.slurm" in line for line in restarts)
+
+    def test_save_many_needs_the_same_core_count(self, stopped, slurm):
+        path = stopped / "nx_128" / "nx_128.in"
+        path.write_text(
+            path.read_text().replace("save_for_restart = .true.", "save_for_restart = .true.\n  save_many = .true.")
+        )
+        outcomes = dict(scan.restart(stopped, sbatch_args=["--nodes=4"]))
+        assert outcomes["nx_128"] == (
+            "cannot restart: its restart files are per process (save_many), "
+            "from 768 cores, not 512"
+        )
+        assert outcomes["nx_256"] == "job 1003"
+
+    def test_dry_run_changes_nothing(self, stopped, slurm):
+        before = (stopped / "nx_128" / "nx_128.in").read_text()
+        scan.restart(stopped, dry_run=True)
+        assert (stopped / "nx_128" / "nx_128.in").read_text() == before
+        assert "1003" not in scan_jobs_csv(stopped)
 
 
 class TestCli:
@@ -364,6 +664,16 @@ class TestCli:
         cli.main(["scan", "write", str(template), str(directory), "--vary", "nx=128"])
         with pytest.raises(SystemExit):
             cli.main(["scan", "submit", str(directory), "--time=1-00:00:00"])
+
+    def test_restart(self, transfer_template, tmp_path, slurm, capsys):
+        directory = tmp_path / "scan"
+        cli.main(["scan", "write", str(transfer_template), str(directory), "--vary", "nx=128"])
+        cli.main(["scan", "submit", str(directory)])
+        capsys.readouterr()
+        assert cli.main(["scan", "restart", str(directory)]) == 0
+        assert "nx_128  skipped: no exit reason since its last job" in capsys.readouterr().out
+        assert cli.main(["scan", "restart", str(directory), "--runs", "nx_128"]) == 1
+        assert "nx_128  cannot restart: no restart files" in capsys.readouterr().out
 
     def test_values_are_typed(self, template, tmp_path):
         directory = tmp_path / "scan"

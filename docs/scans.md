@@ -6,6 +6,7 @@ gs2ew scan write NL_cbc.in convergence/ \
 gs2ew scan submit convergence/ --dry-run -- --time=12:00:00   # check first
 gs2ew scan submit convergence/ -- --time=12:00:00
 gs2ew scan status convergence/
+gs2ew scan restart convergence/                              # runs that hit their time limit
 ```
 
 `write` gives each point its own directory, holding the template with only
@@ -35,6 +36,59 @@ in none because the template leaves it at its default.
 records job IDs in `jobs.csv`, and passes anything after `--` to `sbatch`.
 `status` reports each run's exit reason, or its job's state.
 
+## Core counts
+
+The transfer diagnostics need every process to hold whole $(k_x, k_y)$
+planes. GS2 hands each process an equal, contiguous share of its layout, so
+for `layout = 'xyles'` the core count must divide `nlambda * negrid * nspec`.
+`nlambda` counts the pitch angles: the passing ones (`npassing`, or
+`2 * ngauss`) and one trapped one per bounce point, of which there are up to
+`ntheta / 2 + 1`. So a scan over `ntheta` changes the core counts that work:
+for the CBC with `npassing = 15`, ntheta 48, 64 and 96 need core counts
+dividing 1280, 1536 and 2048.
+
+A nonlinear run should also be on a sweetspot: a count that splits GS2's
+layouts evenly, dimension by dimension, which keeps the transforms of the
+nonlinear term cheap. `ingen` lists them in its report; without one, gs2ew
+works them out the same way. For nlambda = 48 that is 1, 2, 4, ..., 32, then
+32 times each divisor of 48: so 96, but not 48, though 48 divides 1536.
+
+The core count asked for, by the job script or with `-- --nodes=N`, is the
+most a run gets: `submit` gives each run the largest count up to it that
+keeps the planes whole and is a sweetspot, on the fewest nodes that share it
+evenly, and says when that's fewer. A restart goes on as many cores as
+before. `--no-core-check` uses the count asked for regardless.
+
+GS2's own check (in `gs2_layouts.fpp`) looks to let some split counts
+through, such as 640 for nlambda = 48, keeping the diagnostics on when the
+planes are split; not yet confirmed by a run.
+
+`write` runs GS2's `ingen` on each input (`--ingen`, or `$GS2_INGEN`, or
+`ingen` on `PATH`) for the exact `nlambda` in its `.report`. Without it,
+`nlambda` is estimated by the upper bound, which strong shaping can bring
+down (κ = 2 has 44 rather than 48 for ntheta = 64).
+
+## Restarts
+
+`restart` restarts the runs GS2 stopped at `avail_cpu_time` (or those given
+with `--runs`, whatever stopped them). It sets each one's input file, in place,
+to restart:
+
+| Setting | So that GS2 |
+| --- | --- |
+| `ginit_option = 'many'` | starts from the restart files |
+| `append_old = .true.` | adds to the existing `.out.nc` |
+| `delt_option = 'check_restart'` | carries on with the timestep it had reached |
+| `read_response = .true.` | reuses the response matrices, if it saved them |
+
+and submits it as `submit` would. The run needs `save_for_restart = .true.`
+and its restart files in `restart_dir`; with `save_many`, they are one file
+per process, so the run must go on the same core count. Each restart runs
+another `nstep` steps, so set `max_sim_time` to stop at a given time.
+
+GS2 keeps the first input deck in an output it appends to, so gs2ew doesn't
+count these settings as edits to the input file.
+
 ## From Python
 
 Points are lists of dicts, so scans combine:
@@ -54,15 +108,12 @@ template with the point applied; these are recorded as derived.
 
 `write` and `submit` warn about mistakes that waste a run:
 
-- `read_response = .true.` or a restart (`ginit_option = 'many'`) in the
-  template, which a fresh directory has nothing for.
+- A restart (`ginit_option = 'many'`) in the template, which a fresh
+  directory has nothing for. (`read_response` is fine: GS2 calculates the
+  response matrices if it finds none.)
 - A scan over `beta` or a species gradient without
   `auto_set_beta_prime = .true.` in `theta_grid_parameters`, or with
   `beta_prime_input` (or `alpha_input`, ...) still set, which GS2 then uses
   instead. Let GS2 work out the pressure gradient rather than setting it.
 - `avail_cpu_time` longer than the job's time limit, so Slurm would kill GS2
   before it writes its restart files.
-
-Not checked: the transfer diagnostics switch themselves off unless the core
-count divides `nlambda * negrid * nspec`, and `nlambda` follows `ntheta`. A
-convergence scan over either can need a different core count per run.

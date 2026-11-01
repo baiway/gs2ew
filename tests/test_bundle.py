@@ -215,6 +215,19 @@ class TestRunFiles:
         assert (figure.parent / "cbc.in").read_text() == original
         assert bundle.read_bundle(figure.with_suffix(".nc"))["input_file"].item() == original
 
+    def test_restarted_deck_is_not_an_edit(self, spec, run_dir, tmp_path, capsys):
+        (run_dir / "cbc.in").write_text(
+            SYNTHETIC_DECK + "&init_g_knobs\n ginit_option = 'many'\n/\n"
+        )
+        with xr.open_dataset(run_dir / "cbc.out.nc") as ds:
+            figure = bundle.make_plot(
+                "test_profile", ds, {}, output_dir=tmp_path / "out", quiet=True
+            )
+        b = bundle.read_bundle(figure.with_suffix(".nc"))
+        assert b["input_file"].item() == SYNTHETIC_DECK
+        assert "set to restart" in b.attrs["input_file_origin"]
+        assert "Warning" not in capsys.readouterr().out
+
     def test_embedded_deck_without_a_file_on_disk(self, spec, run_dir, tmp_path):
         (run_dir / "cbc.in").unlink()
         with xr.open_dataset(run_dir / "cbc.out.nc") as ds:
