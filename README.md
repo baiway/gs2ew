@@ -26,17 +26,21 @@ uv sync
 ### Command line
 
 ```bash
-uv run gs2ew info run.out.nc                 # what diagnostics the file contains
-uv run gs2ew plot run.out.nc -o outputs/     # the standard plot set
-uv run gs2ew plot run.out.nc -o outputs/ --movies
-uv run gs2ew batch project/ -o analysis/ --skip cbc
+uv run gs2ew info RUN                        # what diagnostics the file contains
+uv run gs2ew plot RUN                        # the standard plot set, in RUN/gs2ew/
+uv run gs2ew plot RUN --only transfer_theta transfer_summary
+uv run gs2ew plot RUN -o outputs/ --movies
+uv run gs2ew batch project/ --skip cbc       # every run under project/
 ```
 
-`batch` walks a directory for `*.out.nc`, mirrors each run's path into the
-output root (so runs sharing an input-file name don't collide), and keeps going
-if one run fails. It selects a headless matplotlib backend, so it works on a
-compute node. See [`examples/analyse_batch.py`](examples/analyse_batch.py) for
-the SLURM script.
+`RUN` is a run directory holding one `*.out.nc`, or the `*.out.nc` itself.
+Plots go in `gs2ew/` inside the run directory unless `-o` is given.
+
+`batch` walks a directory for `*.out.nc` and keeps going if one run fails. With
+`-o`, it mirrors each run's path into the output root, so runs sharing an
+input-file name don't collide. It selects a headless matplotlib backend, so it
+works on a compute node. See [`examples/analyse_batch.py`](examples/analyse_batch.py)
+for the SLURM script.
 
 ### Python
 
@@ -53,6 +57,33 @@ with xr.open_dataset("run.out.nc") as ds:
 
 [`examples/analysis.py`](examples/analysis.py) is a template deck covering every
 plot; copy it and comment out what you don't want.
+
+Each `plot_*` is a `compute_*` step, which reduces the output to the data the
+figure shows, followed by a `render_*` step that draws it. Call them yourself to
+work with the reduced data directly.
+
+### Plot data and provenance
+
+Next to each figure, gs2ew writes a netCDF *bundle* with the same name, holding:
+
+- the data the figure was drawn from, with GS2's units and how it was reduced
+- every option used to make it
+- the GS2 and gs2ew versions, commits, branches, and whether either had
+  uncommitted changes
+- the GS2 output's path and run UUID, and the input deck the run read
+
+Each output directory also gets the run's input deck and a `reproduce.sh`.
+
+```bash
+gs2ew replot RUN/gs2ew/transfer_theta_averaged.nc     # redraw, no raw output needed
+gs2ew replot RUN/gs2ew/transfer_theta_averaged.nc --set normalise=true  # restyled
+gs2ew reproduce RUN/gs2ew/*.nc                        # redo the analysis and compare
+```
+
+`reproduce` checks the run UUID first, writes to `reproduced/`, and reports
+whether the data match. `reproduce.sh` pins each command to gs2ew's exact commit
+with `uvx`. Pass `--require-clean` to `plot` to refuse to run from uncommitted
+gs2ew or GS2 code, and `--no-data` to skip the bundles. Movies save no data.
 
 ## Transfer diagnostics
 
@@ -155,6 +186,8 @@ they skip. Everything else runs against a synthetic dataset built in
 | `gs2ew.geometry` | flux-surface-weighted $\theta$ integrals |
 | `gs2ew.movie` | the frame loop and ffmpeg encoder |
 | `gs2ew.io`, `.metadata`, `.weights` | reading files |
+| `gs2ew.provenance` | code versions, input decks and run identity |
+| `gs2ew.bundle` | the data and provenance saved with each plot, `replot`, `reproduce` |
 | `gs2ew.plots.*` | the plots themselves |
 | `gs2ew.cli` | the `gs2ew` command |
 
