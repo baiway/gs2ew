@@ -8,6 +8,7 @@ from gs2ew.plots import (  # noqa: F401
     fields,
     transfer_spectral,
     transfer_summary,
+    transfer_surface,
     transfer_theta,
     transfer_time,
     transfer_tp,

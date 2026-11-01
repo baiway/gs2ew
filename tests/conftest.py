@@ -129,6 +129,11 @@ def make_dataset(
         "phi2": ("t", np.exp(0.4 * np.minimum(t, 50.0))),
         "bmag": ("theta", 1.0 + 0.3 * np.cos(theta)),
         "jacob": ("theta", 1.0 + 0.2 * np.cos(theta)),
+        # A circular surface of half-width 0.5 at R = 3, as GS2 writes it.
+        "rplot": ("theta", 3.0 + 0.5 * np.cos(theta)),
+        "zplot": ("theta", 0.5 * np.sin(theta)),
+        "rprime": ("theta", np.cos(theta)),
+        "zprime": ("theta", np.sin(theta)),
         "type_of_species": ("species", np.array([1, 2][:nspec])),
     }
 

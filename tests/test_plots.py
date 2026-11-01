@@ -8,13 +8,14 @@ run the same paths against real GS2 output.
 from __future__ import annotations
 
 import matplotlib
+import numpy as np
 import pytest
 
 matplotlib.use("Agg")
 
 from gs2ew import bundle, catalog
 from gs2ew.catalog import Drive
-from gs2ew.plots import fields, transfer_spectral, transfer_summary
+from gs2ew.plots import fields, transfer_spectral, transfer_summary, transfer_surface
 from gs2ew.plots import transfer_theta, transfer_time, transfer_tp, weights
 
 from conftest import make_dataset
@@ -35,6 +36,10 @@ BUNDLED_PLOTS = {
     "phi2_by_theta": (fields.plot_phi2_by_theta, {"window": 30.0, "ylim": (0, 50)}),
     "transfer_theta": (transfer_theta.plot_transfer_theta, {"show_std": True, "window": 30.0}),
     "transfer_summary": (transfer_summary.plot_transfer_summary, {}),
+    "transfer_flux_surface": (
+        transfer_surface.plot_transfer_flux_surface,
+        {"window": 30.0, "quantities": ["U", "H"], "ncols": 2},
+    ),
     "transfer_hovmoller": (
         transfer_time.plot_transfer_hovmoller,
         {"tstart": 20.0, "share": "all"},
@@ -230,6 +235,44 @@ class TestTransferTheta:
         )
         assert figure.exists()
         assert not list(tmp_path.glob("*.nc"))
+
+
+class TestFluxSurface:
+    def test_needs_geometry(self, ds, tmp_path):
+        with pytest.raises(ValueError, match="rplot, zplot"):
+            transfer_surface.plot_transfer_flux_surface(
+                ds.drop_vars(["rplot", "zplot"]), output_dir=tmp_path, quiet=True
+            )
+
+    def test_one_poloidal_turn(self, ds):
+        """With nperiod > 1, only |theta| <= pi is drawn."""
+        reduced = transfer_surface.compute_transfer_flux_surface(
+            ds.assign_coords(theta=2 * ds["theta"]), quiet=True
+        )
+        assert abs(reduced["theta"]).max() <= np.pi
+        assert reduced.sizes["theta"] < ds.sizes["theta"]
+
+    def test_four_drives_make_two_rows_of_two(self, ds):
+        reduced = transfer_surface.compute_transfer_flux_surface(
+            ds, quantities=["U", "H", "S"], fields=["phi"], quiet=True
+        )
+        fig = transfer_surface.render_transfer_flux_surface(reduced)
+        panels = [ax for ax in fig.axes if ax.get_label() != "<colorbar>"]
+        assert panels[0].get_gridspec().get_geometry() == (2, 2)
+        assert all(ax.get_visible() for ax in panels)
+
+    def test_reference_surfaces_of_a_circle(self, ds):
+        theta = ds["theta"].values
+        surfaces, axis = transfer_surface.reference_surfaces(
+            ds["rplot"].values, ds["zplot"].values, ds["rprime"].values
+        )
+        width, r, z = surfaces[-1]
+        assert width == 1.0
+        np.testing.assert_allclose(r, 3.0 + np.cos(theta), atol=1e-12)
+        np.testing.assert_allclose(z, np.sin(theta), atol=1e-12)
+        np.testing.assert_allclose(axis, (3.0, 0.0), atol=1e-12)
+        # The simulated surface itself is not repeated.
+        assert 0.5 not in [w for w, _, _ in surfaces]
 
 
 class TestFieldsByMode:

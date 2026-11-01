@@ -53,6 +53,11 @@ from gs2ew.plots.transfer_summary import (
     plot_transfer_summary,
     render_transfer_summary,
 )
+from gs2ew.plots.transfer_surface import (
+    compute_transfer_flux_surface,
+    plot_transfer_flux_surface,
+    render_transfer_flux_surface,
+)
 from gs2ew.plots.transfer_theta import (
     compute_transfer_theta,
     plot_transfer_theta,
@@ -124,6 +129,7 @@ __all__ = [
     "render_phi2_by_theta",
     # Transfer
     "compute_transfer_butterfly",
+    "compute_transfer_flux_surface",
     "compute_transfer_hovmoller",
     "compute_transfer_spectral",
     "compute_transfer_spectrum",
@@ -132,6 +138,7 @@ __all__ = [
     "compute_transfer_trapped_passing",
     "compute_transfer_trapped_passing_spectral",
     "plot_transfer_butterfly",
+    "plot_transfer_flux_surface",
     "plot_transfer_hovmoller",
     "plot_transfer_spectral",
     "plot_transfer_spectral_movie",
@@ -144,6 +151,7 @@ __all__ = [
     "plot_transfer_trapped_passing_spectral",
     "plot_transfer_trapped_passing_spectral_movie",
     "render_transfer_butterfly",
+    "render_transfer_flux_surface",
     "render_transfer_hovmoller",
     "render_transfer_spectral",
     "render_transfer_spectrum",
