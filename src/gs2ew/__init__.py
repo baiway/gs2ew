@@ -15,13 +15,15 @@ Layout:
 * :mod:`gs2ew.geometry` — flux-surface-weighted theta integrals
 * :mod:`gs2ew.movie` — the frame-loop and ffmpeg driver
 * :mod:`gs2ew.io`, :mod:`gs2ew.metadata`, :mod:`gs2ew.weights` — reading files
+* :mod:`gs2ew.provenance` — code versions, input decks and source identity
 * :mod:`gs2ew.plots` — the plotting routines themselves
 """
 
 from gs2ew.catalog import Drive, available_drives, identity_residual
 from gs2ew.geometry import theta_integral
-from gs2ew.io import detect_saturation_time, load_gs2_output
+from gs2ew.io import RunFiles, detect_saturation_time, find_run, load_gs2_output
 from gs2ew.metadata import get_metadata, get_version, requires_version
+from gs2ew.provenance import CodeVersion, gs2_version, gs2ew_version
 from gs2ew.plots.fields import (
     plot_fields_by_mode,
     plot_fields_time_traces,
@@ -47,13 +49,18 @@ from gs2ew.timebase import TimeWindow, frame_indices, resolve_window
 
 __all__ = [
     # Core
+    "CodeVersion",
     "Drive",
+    "RunFiles",
     "TimeWindow",
     "available_drives",
     "detect_saturation_time",
+    "find_run",
     "frame_indices",
     "get_metadata",
     "get_version",
+    "gs2_version",
+    "gs2ew_version",
     "identity_residual",
     "load_gs2_output",
     "requires_version",

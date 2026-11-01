@@ -26,6 +26,50 @@ REAL_NC = Path(
     )
 )
 
+# A spread of real outputs, old and new, for checking that provenance degrades
+# gracefully when GS2 recorded less. Each skips if absent.
+_ANALYSIS = Path("/Users/bailey/analysis")
+REAL_FILES: dict[str, Path] = {
+    # Newest layout, clean GS2 build, embedded input deck and run command.
+    "nonlinear-8.2.1-2129": _ANALYSIS
+    / "aug2026-nonlinear-beta-scan/scan/beta_0p0000/beta_0p0000.out.nc",
+    # Small linear run from a GS2 build with uncommitted changes.
+    "linear-8.2.1-2130-modified": _ANALYSIS
+    / "05-linear-beta-scan/claude-assisted-analysis/refine_beta0p012/runs"
+    / "b0p0120_ky0p100.out.nc",
+    # Older transfer layout (velocity-resolved era).
+    "nonlinear-8.2.1-1755": _ANALYSIS
+    / "2026-06-18-EPS-scramble/2026-06-18-EPS-scramble"
+    / "01-electrostatic-higher-res-test/NL_cbc_higher_res.out.nc",
+    # GS2 8.2.0: an input deck but no build_config.
+    "reduced-8.2.0": _ANALYSIS
+    / "tobias-shaping-paper/cbc/tprim6p0"
+    / "00_nx128_ny64_ntheta32_npassing15_negrid16_cfl0p5/baseline/reduced_output"
+    / "reduced_gs2_output.out.nc",
+    # No version metadata at all.
+    "no-metadata": _ANALYSIS / "collab/16-cbc-long-time/cbc-unshaped.out.nc",
+}
+
+#: The input deck embedded in synthetic datasets.
+SYNTHETIC_DECK = """&knobs
+ delt = 0.05
+ nstep = 1000
+/
+
+&theta_grid_parameters
+ ntheta = 8
+/
+"""
+
+#: GS2's commit and state as recorded in synthetic datasets.
+SYNTHETIC_GS2_HASH = "5f2ef277b36dbda90f9386769027521ebd17edbc"
+
+
+def char_array(lines: list[str], width: int = 200) -> np.ndarray:
+    """Text as GS2 stores it: a (lines, width) array of space-padded bytes."""
+    padded = b"".join(line.ljust(width)[:width].encode() for line in lines)
+    return np.frombuffer(padded, dtype="S1").reshape(len(lines), width)
+
 
 def make_dataset(
     fields: tuple[str, ...] = ("phi", "apar", "bpar"),
@@ -33,6 +77,8 @@ def make_dataset(
     trapped_passing: bool = True,
     kinetic: bool = True,
     split: bool = True,
+    metadata: bool = True,
+    gs2_state: str = "clean",
     nt: int = 24,
     ntheta: int = 9,
     nk: int = 7,
@@ -49,6 +95,10 @@ def make_dataset(
     they sum to U only in the `theta` and `kxtarget` reductions; in the
     source-resolved reductions they are independent of U. Only the FLR part
     has trapped/passing output.
+
+    With `metadata`, the dataset carries the provenance GS2 records: version
+    attributes, a ``build_config`` with git state `gs2_state`, a run UUID,
+    and :data:`SYNTHETIC_DECK` as the embedded input deck.
     """
     rng = np.random.default_rng(seed)
 
@@ -132,7 +182,31 @@ def make_dataset(
                 rng.normal(size=tuple(len(coords[d]) for d in dims)),
             )
 
-    return xr.Dataset(data, coords=coords)
+    attrs: dict[str, str] = {}
+    if metadata:
+        deck = SYNTHETIC_DECK.splitlines()
+        data["input_file"] = (("nlines", "char200"), char_array(deck))
+        data["used_input_file"] = (
+            ("nused_lines", "char200"),
+            char_array(deck + ["&layouts_knobs", " layout = 'lxyes'", "/"]),
+        )
+        data["build_config"] = (
+            (),
+            np.bytes_(
+                f'GIT_HASH="{SYNTHETIC_GS2_HASH}"\n'
+                'GIT_VERSION="8.2.1-2129-g5f2ef277b"\n'
+                'GIT_BRANCH="fix/kinetic-energy-transfer-prefactor"\n'
+                f'GIT_STATE="{gs2_state}"\n'
+            ),
+        )
+        data["run_command"] = ((), np.bytes_("gs2 synthetic.in"))
+        attrs = {
+            "software_version": "8.2.1-2129-g5f2ef277b",
+            "id": "00000000-0000-4000-8000-000000000000",
+            "date_created": "2026-08-21T08:05:28.316Z+01:00",
+        }
+
+    return xr.Dataset(data, coords=coords, attrs=attrs)
 
 
 @pytest.fixture
@@ -145,6 +219,15 @@ def ds() -> xr.Dataset:
 def ds_es() -> xr.Dataset:
     """A synthetic electrostatic dataset: phi only."""
     return make_dataset(fields=("phi",))
+
+
+@pytest.fixture(params=list(REAL_FILES), ids=list(REAL_FILES))
+def real_file(request) -> Path:
+    """Each of :data:`REAL_FILES` in turn, or a skip if it is not available."""
+    path = REAL_FILES[request.param]
+    if not path.exists():
+        pytest.skip(f"GS2 output not found at {path}")
+    return path
 
 
 @pytest.fixture
