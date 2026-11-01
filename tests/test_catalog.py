@@ -114,6 +114,10 @@ class TestLabels:
             == r"$N_\mathbf{k}^{U_\mathrm{field}}$"
         )
 
+    def test_kinetic_label(self):
+        kinetic = Drive(catalog.KINETIC)
+        assert kinetic.label() == kinetic.label_short() == r"$N_\mathbf{k}^\mathrm{KE}$"
+
 
 class TestIdentity:
     def test_holds_for_synthetic_data(self, ds):

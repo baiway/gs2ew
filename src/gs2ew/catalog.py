@@ -62,7 +62,7 @@ QUANTITY_SYMBOLS: dict[str, str] = {
 # The kinetic-energy transfer is a separate diagnostic with no mediator-field
 # decomposition, so it gets its own quantity key and its own label.
 KINETIC = "KE"
-KINETIC_LABEL = r"$T_v^\mathrm{ZF}$"
+KINETIC_LABEL = r"$N_\mathbf{k}^\mathrm{KE}$"
 
 # Reductions over the triad wavevectors: name -> (variable suffix, extra dim).
 # `theta` is the fully summed profile; the others resolve one wavevector leg.

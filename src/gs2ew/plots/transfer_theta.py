@@ -2,8 +2,8 @@ r"""Poloidal structure of the nonlinear transfer.
 
 Plots :math:`N_\mathbf{k}^{Q,f}(\theta)` — the nonlinear drive of the zonal
 modes for each transferred quantity Q and mediator field f — faceted into one
-column per field, plus the kinetic-energy transfer :math:`T_v^\mathrm{ZF}` as a
-common dashed reference.
+column per field, plus the kinetic-energy transfer :math:`N_\mathbf{k}^\mathrm{KE}`
+as a common dashed reference.
 """
 
 from __future__ import annotations
