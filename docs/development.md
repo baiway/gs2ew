@@ -22,6 +22,7 @@ they skip. Everything else runs against a synthetic dataset built in
 | `gs2ew.bundle` | the data and provenance saved with each plot, `replot`, `reproduce` |
 | `gs2ew.style`, `styles/` | how figures look and the formats they're saved in |
 | `gs2ew.plots.*` | the plots themselves |
+| `gs2ew.scan`, `templates/` | writing, submitting and following parameter scans |
 | `gs2ew.cli` | the `gs2ew` command |
 
 Adding a field, quantity or reduction is a table entry in `catalog.py`; the

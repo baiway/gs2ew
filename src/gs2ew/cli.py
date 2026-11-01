@@ -1,12 +1,13 @@
 """Command-line interface.
 
-Five subcommands::
+Six subcommands::
 
     gs2ew info  RUN                        # what is in the file
     gs2ew plot  RUN                        # the standard plot set, in RUN/gs2ew/
     gs2ew batch project/                   # every .out.nc under a directory
     gs2ew replot    RUN/gs2ew/*.nc         # redraw figures from their bundles
     gs2ew reproduce RUN/gs2ew/*.nc         # repeat the analysis from raw output
+    gs2ew scan write|submit|status ...     # write and run a parameter scan
 
 RUN is a run directory holding one ``.out.nc``, or the ``.out.nc`` itself.
 `plot` and `batch` take the same options, so a batch job produces exactly what
@@ -31,7 +32,7 @@ matplotlib.use("Agg")
 
 import xarray as xr
 
-from gs2ew import bundle, catalog, provenance, style
+from gs2ew import bundle, catalog, provenance, scan, style
 from gs2ew.io import OUTPUT_SUFFIX, RunFiles, find_run, load_gs2_output
 from gs2ew.metadata import get_metadata
 from gs2ew.provenance import CodeVersion
@@ -533,6 +534,77 @@ def cmd_reproduce(args: argparse.Namespace) -> int:
     return status
 
 
+def _scalar(text: str) -> object:
+    """An input-file value from the command line: an integer, a real, a
+    logical (true/false, .true./.false.) or else a string."""
+    for parse in (int, float):
+        try:
+            return parse(text)
+        except ValueError:
+            pass
+    logical = text.lower().strip(".")
+    if logical in {"true", "false"}:
+        return logical == "true"
+    return text
+
+
+def _vary(text: str) -> tuple[str, list[object]]:
+    """Parse ``KEY=V1,V2,...`` for `scan write --vary`."""
+    key, sep, values = text.partition("=")
+    if not sep or not key or not values:
+        raise argparse.ArgumentTypeError(f"expected KEY=V1,V2,..., got {text!r}")
+    return key, [_scalar(v) for v in values.split(",")]
+
+
+#: How `scan write` combines its --vary parameters.
+SCAN_MODES = {
+    "one-at-a-time": scan.one_at_a_time,
+    "product": scan.product,
+    "zip": scan.zipped,
+}
+
+
+def cmd_scan_write(args: argparse.Namespace) -> int:
+    """Write a run directory for each point of a scan."""
+    points = SCAN_MODES[args.mode](dict(args.vary))
+    machine = None if args.machine == "none" else args.machine
+    try:
+        run_dirs = scan.write(args.template, points, args.directory, machine=machine)
+    except (FileExistsError, ValueError) as exc:
+        raise SystemExit(f"gs2ew: {exc}") from None
+    for run_dir in run_dirs:
+        print(run_dir)
+    print(f"Wrote {len(run_dirs)} run(s); submit with: gs2ew scan submit {args.directory}")
+    return 0
+
+
+def cmd_scan_submit(args: argparse.Namespace) -> int:
+    """Submit the runs of a scan that have not been yet."""
+    sbatch_args = args.sbatch_args
+    if sbatch_args and sbatch_args[0] == "--":
+        sbatch_args = sbatch_args[1:]
+    try:
+        outcomes = scan.submit(args.directory, sbatch_args, dry_run=args.dry_run)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(f"gs2ew: {exc}") from None
+    width = max((len(name) for name, _ in outcomes), default=0)
+    for name, outcome in outcomes:
+        print(f"{name:<{width}}  {outcome}")
+    return 1 if any(o.startswith("sbatch failed") for _, o in outcomes) else 0
+
+
+def cmd_scan_status(args: argparse.Namespace) -> int:
+    """Report where each run of a scan has got to."""
+    try:
+        states = scan.status(args.directory)
+    except FileNotFoundError as exc:
+        raise SystemExit(f"gs2ew: {exc}") from None
+    width = max((len(name) for name, _ in states), default=0)
+    for name, state in states:
+        print(f"{name:<{width}}  {state}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gs2ew", description="Post-processing for GS2 output."
@@ -592,6 +664,58 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"directory for the results (default: {bundle.REPRODUCED_DIR}/ beside each bundle)",
     )
     reproduce.set_defaults(func=cmd_reproduce)
+
+    scan_parser = sub.add_parser("scan", help="write, submit and follow a parameter scan")
+    scan_sub = scan_parser.add_subparsers(dest="scan_command", required=True)
+
+    write = scan_sub.add_parser(
+        "write", help="write a run directory for each point of a scan"
+    )
+    write.add_argument("template", help="the GS2 input file each run starts from")
+    write.add_argument("directory", help="where to write the scan; must be new or empty")
+    write.add_argument(
+        "--vary",
+        action="append",
+        type=_vary,
+        required=True,
+        metavar="KEY=V1,V2,...",
+        help="a parameter and its values, e.g. --vary ntheta=32,48; qualify "
+        "KEY by its namelist (species_parameters_2.tprim) if the bare name is "
+        "ambiguous or not in the template. Repeat for more parameters",
+    )
+    write.add_argument(
+        "--mode",
+        choices=list(SCAN_MODES),
+        default="one-at-a-time",
+        help="the template plus each value on its own (default); every "
+        "combination of the values (product); or the i-th values together (zip)",
+    )
+    write.add_argument(
+        "--machine",
+        default="archer2",
+        help=f"the Slurm template to copy into each run: {', '.join(scan.machines())}, "
+        "a file of your own, or none (default: archer2)",
+    )
+    write.set_defaults(func=cmd_scan_write)
+
+    submit = scan_sub.add_parser(
+        "submit", help="sbatch every run without output or a job yet"
+    )
+    submit.add_argument("directory", help="the scan directory")
+    submit.add_argument(
+        "--dry-run", action="store_true", help="print the sbatch commands without running them"
+    )
+    submit.add_argument(
+        "sbatch_args",
+        nargs="*",
+        metavar="-- SBATCH_ARGS",
+        help="options for sbatch, after --, e.g. -- --time=02:00:00 --nodes=2",
+    )
+    submit.set_defaults(func=cmd_scan_submit)
+
+    status = scan_sub.add_parser("status", help="where each run of a scan has got to")
+    status.add_argument("directory", help="the scan directory")
+    status.set_defaults(func=cmd_scan_status)
 
     return parser
 

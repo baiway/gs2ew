@@ -19,6 +19,7 @@ Layout:
 * :mod:`gs2ew.bundle` — the reduced data and provenance saved with each plot
 * :mod:`gs2ew.style` — how figures look, and the formats they are saved in
 * :mod:`gs2ew.plots` — the plotting routines themselves
+* :mod:`gs2ew.scan` — writing, submitting and following parameter scans
 """
 
 from gs2ew.bundle import read_bundle, replot, reproduce
