@@ -20,6 +20,7 @@ they skip. Everything else runs against a synthetic dataset built in
 | `gs2ew.io`, `.metadata`, `.weights` | reading files |
 | `gs2ew.provenance` | code versions, input decks and run identity |
 | `gs2ew.bundle` | the data and provenance saved with each plot, `replot`, `reproduce` |
+| `gs2ew.style`, `styles/` | how figures look and the formats they're saved in |
 | `gs2ew.plots.*` | the plots themselves |
 | `gs2ew.cli` | the `gs2ew` command |
 

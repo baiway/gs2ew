@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 from matplotlib.figure import Figure
@@ -146,20 +145,14 @@ def render_transfer_trapped_passing(
     `norm_factors` maps :func:`norm_key` keys to the divisors used in place
     of each curve's own peak when `normalise` is True.
     """
-    tw = TimeWindow.from_attrs(reduced.attrs)
     drives = common.drives_in(reduced)
     field_rows = [f for f in catalog.FIELDS if any(d.field == f for _, d in drives)]
     species = common.species_labels(reduced)
     tp_values = _tp_values(reduced)
     theta = reduced["theta"].values
 
-    fig, axes = plt.subplots(
-        len(field_rows),
-        len(species),
-        figsize=(5.2 * len(species), 4.0 * len(field_rows)),
-        sharex=True,
-        sharey="row",
-        squeeze=False,
+    fig, axes = common.subplots(
+        len(field_rows), len(species), aspect=0.75, sharex=True, sharey="row"
     )
 
     for i, field in enumerate(field_rows):
@@ -193,7 +186,6 @@ def render_transfer_trapped_passing(
                     ax.plot(
                         theta,
                         values,
-                        linewidth=1.5,
                         color=common.drive_colour(drive),
                         linestyle=TP_LINESTYLES[tp],
                         label=f"{drive.label_short()} {catalog.TP_LABELS[tp]}",
@@ -209,37 +201,21 @@ def render_transfer_trapped_passing(
                         )
 
             ax.axhline(0, color="k", linewidth=0.6, alpha=0.5)
-            ax.grid(alpha=0.3)
             if ylim is not None:
                 ax.set_ylim(ylim)
             if i == 0:
                 ax.set_title(species_label)
             if i == len(field_rows) - 1:
-                ax.set_xlabel(r"$\theta$", fontsize=12)
+                ax.set_xlabel(r"$\theta$")
             if j == 0:
                 ax.set_ylabel(
                     rf"${catalog.FIELDS[field]}$" + "\n"
-                    + ("normalised transfer" if normalise else "transfer"),
-                    fontsize=11,
+                    + ("normalised transfer" if normalise else "transfer")
                 )
 
     # A panel can carry six curves (three quantities x two populations), so an
-    # in-axes legend would sit on top of the data. Put one below the figure.
-    handles, labels = axes[0][0].get_legend_handles_labels()
-    fig.legend(
-        handles,
-        labels,
-        loc="lower center",
-        ncols=min(len(labels), 3),
-        fontsize=9,
-        frameon=False,
-    )
-
-    if tw.title is not None:
-        fig.suptitle(tw.title)
-    # Leave room at the bottom for the figure-level legend.
-    legend_rows = -(-len(labels) // 3)
-    fig.tight_layout(rect=(0, 0.04 + 0.035 * legend_rows, 1, 1))
+    # in-axes legend would sit on top of the data. Put one above the figure.
+    common.figure_legend(fig, *axes[0][0].get_legend_handles_labels())
     return fig
 
 
@@ -256,7 +232,7 @@ def plot_transfer_trapped_passing(
     norm_factors: dict[tuple[Drive, int, int] | str, float] | None = None,
     show_std: bool = False,
     ylim: tuple[float, float] | None = None,
-    tight_bbox: bool = True,
+    tight_bbox: bool = False,
     save_data: bool = True,
     quiet: bool = False,
 ) -> Path:
@@ -398,7 +374,6 @@ def plot_transfer_trapped_passing_movie(
             normalise=frame_norm,
             norm_factors=norm_factors,
             ylim=ylim,
-            tight_bbox=False,
             save_data=False,
             quiet=True,
         )
@@ -436,7 +411,6 @@ def render_transfer_trapped_passing_spectral(
     vmax: float | None = None,
 ) -> Figure:
     """Draw the planes from :func:`compute_transfer_trapped_passing_spectral`."""
-    tw = TimeWindow.from_attrs(reduced.attrs)
     [(name, drive)] = common.drives_in(reduced)
     da = reduced[name]
     if klim is not None:
@@ -449,14 +423,8 @@ def render_transfer_trapped_passing_spectral(
 
     limit = vmax if vmax is not None else common.symmetric_limit(np.asarray(da.values))
 
-    fig, axes = plt.subplots(
-        len(tp_values),
-        len(species),
-        figsize=(4.8 * len(species), 3.8 * len(tp_values)),
-        sharex=True,
-        sharey=True,
-        squeeze=False,
-        layout="constrained",
+    fig, axes = common.subplots(
+        len(tp_values), len(species), aspect=0.8, sharex=True, sharey=True
     )
 
     mesh = None
@@ -467,27 +435,20 @@ def render_transfer_trapped_passing_spectral(
                 k_values,
                 theta,
                 np.asarray(da.isel(species=j).sel(tp=tp).values),
-                cmap=common.DIVERGING_CMAP,
                 vmin=-limit,
                 vmax=limit,
                 shading="auto",
                 rasterized=True,
             )
+            ax.grid(False)
             if i == 0:
                 ax.set_title(species_label)
             if i == len(tp_values) - 1:
-                ax.set_xlabel(catalog.K_LABELS["kxt_shift"], fontsize=11)
+                ax.set_xlabel(catalog.K_LABELS["kxt_shift"])
             if j == 0:
-                ax.set_ylabel(
-                    f"{catalog.TP_LABELS[tp]}\n" + r"$\theta$", fontsize=11
-                )
+                ax.set_ylabel(f"{catalog.TP_LABELS[tp]}\n" + r"$\theta$")
 
     fig.colorbar(mesh, ax=axes, label=drive.label(), shrink=0.85)
-
-    title = drive.label()
-    if tw.title is not None:
-        title = f"{title} — {tw.title}"
-    fig.suptitle(title)
     return fig
 
 
@@ -502,7 +463,7 @@ def plot_transfer_trapped_passing_spectral(
     filename: str | None = None,
     klim: float | None = None,
     vmax: float | None = None,
-    tight_bbox: bool = True,
+    tight_bbox: bool = False,
     save_data: bool = True,
     quiet: bool = False,
 ) -> Path:
@@ -593,7 +554,6 @@ def plot_transfer_trapped_passing_spectral_movie(
             filename=frame_path.name,
             klim=klim,
             vmax=vmax,
-            tight_bbox=False,
             save_data=False,
             quiet=True,
         )

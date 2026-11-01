@@ -140,7 +140,8 @@ class TestTransferTheta:
         path = transfer_theta.plot_transfer_theta(
             ds, window=30.0, output_dir=tmp_path, quiet=True
         )
-        assert path.name == "transfer_theta_averaged.png"
+        assert path.name == "transfer_theta_averaged.pdf"
+        assert path.with_suffix(".png").exists()
 
     @pytest.mark.parametrize("kwargs", [
         {"show_std": True, "window": 30.0},
@@ -234,7 +235,7 @@ class TestTransferTheta:
 class TestFieldsByMode:
     def test_writes_figure_and_bundle(self, ds, tmp_path):
         figure = fields.plot_fields_by_mode(ds, output_dir=tmp_path, quiet=True)
-        assert figure.name == "fields_by_mode.png"
+        assert figure.name == "fields_by_mode.pdf"
         assert figure.with_suffix(".nc").exists()
 
     def test_kx_sorted(self, ds):
@@ -249,7 +250,7 @@ class TestFieldsByMode:
         figure = fields.plot_fields_by_mode(
             ds, tstart="saturation", output_dir=tmp_path, quiet=True
         )
-        assert figure.name == "fields_by_mode_averaged.png"
+        assert figure.name == "fields_by_mode_averaged.pdf"
         b = bundle.read_bundle(figure.with_suffix(".nc"))
         assert b["apar2_by_ky"].attrs["cell_methods"] == "t: mean"
         assert b["apar2_by_ky"].attrs["units"] == "GS2 units"

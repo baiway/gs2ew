@@ -27,6 +27,9 @@ test = ["pytest>=8.0"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+gs2ew = ["styles/*.mplstyle"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["slow: exercises a real GS2 output file (deselect with '-m \"not slow\"')"]

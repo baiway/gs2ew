@@ -1,0 +1,68 @@
+# gs2ew's print style: figures drawn at the size they are printed, ready to
+# include at their natural width in a thesis or paper without rescaling.
+#
+# Every gs2ew figure starts from matplotlib's defaults plus this file, so the
+# local matplotlibrc never changes a figure. A style given with `--style` (or
+# `replot --set style=...`) is applied on top of this one.
+
+# --- Size --------------------------------------------------------------------
+# The width of an A4 page's text block. Each plot sets its own height from
+# its panel layout, so only the width is used; change it with `--width`.
+figure.figsize:     6.0, 3.7
+
+# --- Fonts -------------------------------------------------------------------
+# XCharter is Bitstream Charter extended with true italics and maths-friendly
+# metrics, so it matches a Charter-set document (mathdesign's
+# bitstream-charter, say). gs2ew picks it up from a TeX Live install; without
+# one, DejaVu Serif. macOS's own Charter is not listed: matplotlib reads only
+# the roman face of its .ttc, so maths would come out upright.
+font.family:        serif
+font.serif:         XCharter, DejaVu Serif
+mathtext.fontset:   custom
+mathtext.rm:        serif
+mathtext.it:        serif:italic
+mathtext.bf:        serif:bold
+mathtext.fallback:  stix
+# Set ~1pt below 11pt body text, so labels don't compete with the caption.
+font.size:          10
+axes.titlesize:     10
+axes.labelsize:     10
+figure.titlesize:   10
+xtick.labelsize:    9
+ytick.labelsize:    9
+legend.fontsize:    9
+axes.formatter.use_mathtext: True
+
+# --- Axes --------------------------------------------------------------------
+axes.linewidth:     0.8
+axes.grid:          True
+axes.axisbelow:     True
+grid.color:         0.85
+grid.linewidth:     0.6
+
+# gs2ew colours each transferred quantity by its place in this cycle, in the
+# order U, H, S, KE, U_field, U_flr. These are the Okabe-Ito colourblind-safe
+# colours; U, H, S and KE were checked for CVD separation against white
+# (worst adjacent pair dE 11.0 deutan, 25.4 normal). The two parts of the U
+# split are also drawn dotted, so they never rely on hue alone.
+axes.prop_cycle:    cycler('color', ['0072B2', 'D55E00', '009E73', 'CC79A7', '56B4E9', 'E69F00', 'F0E442', '000000'])
+
+# --- Lines and markers -------------------------------------------------------
+lines.linewidth:    1.4
+lines.markersize:   4.0
+
+# --- Legend ------------------------------------------------------------------
+legend.frameon:     False
+legend.handlelength: 1.8
+legend.columnspacing: 1.2
+
+# --- Heatmaps ----------------------------------------------------------------
+# gs2ew draws signed data (every transfer heatmap) with image.cmap on limits
+# symmetric about zero, so this should be a diverging map.
+image.cmap:         RdBu_r
+
+# --- Saving ------------------------------------------------------------------
+# TrueType (or CFF) font subsets keep the text in a PDF selectable, and embed
+# cleanly in pdfLaTeX, XeLaTeX and Tectonic output.
+pdf.fonttype:       42
+ps.fonttype:        42

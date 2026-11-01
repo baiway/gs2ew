@@ -13,7 +13,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 
-from gs2ew import bundle, provenance
+from gs2ew import bundle, provenance, style
 from gs2ew.bundle import PlotSpec
 
 from conftest import SYNTHETIC_DECK, make_dataset
@@ -45,7 +45,7 @@ def _render(reduced, normalise=False, figsize=(4.0, 3.0)):
 def spec():
     """A minimal plot, registered for the duration of one test."""
     spec = bundle.register(
-        PlotSpec("test_profile", _compute, _render, lambda reduced: "profile.png")
+        PlotSpec("test_profile", _compute, _render, lambda reduced: "profile")
     )
     yield spec
     del bundle.PLOTS["test_profile"]
@@ -80,8 +80,34 @@ def made(spec, run_dir, tmp_path):
 class TestMakePlot:
     def test_writes_figure_and_bundle(self, made):
         figure, nc = made
-        assert figure.name == "profile.png" and figure.exists()
+        assert figure.name == "profile.pdf" and figure.exists()
+        assert figure.with_suffix(".png").exists()
         assert nc.exists()
+
+    def test_pdf_has_no_creation_date(self, made):
+        assert b"/CreationDate" not in made[0].read_bytes()
+
+    def test_suffix_picks_one_format(self, spec, run_dir, tmp_path):
+        out = tmp_path / "out"
+        with xr.open_dataset(run_dir / "cbc.out.nc") as ds:
+            figure = bundle.make_plot(
+                "test_profile", ds, {}, output_dir=out, filename="p.png", quiet=True
+            )
+        assert sorted(p.name for p in out.glob("p.*")) == ["p.nc", "p.png"]
+        rec = bundle.recipe(bundle.read_bundle(figure.with_suffix(".nc")))
+        assert rec["save"]["filename"] == "p"
+        assert rec["figure"]["formats"] == ["png"]
+
+    def test_figure_options(self, spec, run_dir, tmp_path):
+        with xr.open_dataset(run_dir / "cbc.out.nc") as ds, style.figure_options(
+            formats=["svg"], dpi=72
+        ):
+            figure = bundle.make_plot(
+                "test_profile", ds, {}, output_dir=tmp_path, quiet=True
+            )
+        assert figure.name == "profile.svg"
+        rec = bundle.recipe(bundle.read_bundle(figure.with_suffix(".nc")))
+        assert rec["figure"]["formats"] == ["svg"] and rec["figure"]["dpi"] == 72
 
     def test_bundle_holds_the_reduced_data(self, made):
         b = bundle.read_bundle(made[1])
@@ -99,7 +125,14 @@ class TestMakePlot:
         assert rec["plot"] == "test_profile"
         assert rec["compute"] == {"tstart": 50.0, "scale": 2.0}
         assert rec["render"] == {"figsize": [5, 3]}
-        assert rec["save"] == {"filename": "profile.png", "dpi": 150, "tight_bbox": True}
+        assert rec["figure"] == {
+            "style": "print",
+            "width": None,
+            "title": True,
+            "formats": ["pdf", "png"],
+            "dpi": 300,
+        }
+        assert rec["save"] == {"filename": "profile", "tight_bbox": False}
 
     def test_provenance(self, made, run_dir):
         attrs = bundle.read_bundle(made[1]).attrs
@@ -247,6 +280,53 @@ class TestReplot:
         text = (nc.parent / bundle.REPRODUCE_SCRIPT).read_text()
         assert "# linear.nc: test_profile" in text
 
+    def test_restyle_from_a_style_file(self, made, tmp_path):
+        _, nc = made
+        style_file = tmp_path / "journal.mplstyle"
+        style_file.write_text("axes.grid: False\nfont.size: 8\n")
+        figure = bundle.replot(
+            nc,
+            output_dir=tmp_path / "journal",
+            style=str(style_file),
+            formats="pdf",
+            quiet=True,
+        )
+        assert sorted(p.name for p in figure.parent.glob("profile.*")) == [
+            "profile.nc",
+            "profile.pdf",
+        ]
+        b = bundle.read_bundle(figure.with_suffix(".nc"))
+        assert bundle.recipe(b)["figure"]["style"] == str(style_file)
+        assert b.attrs["gs2ew_style_file"] == style_file.read_text()
+
+        # The bundle keeps the style, so the figure survives the file moving.
+        original = figure.read_bytes()
+        style_file.unlink()
+        again = bundle.replot(
+            figure.with_suffix(".nc"), output_dir=tmp_path / "again", quiet=True
+        )
+        assert again.read_bytes() == original
+
+    def test_unknown_style(self, made):
+        with pytest.raises(ValueError, match="Unknown style 'nope'"):
+            bundle.replot(made[1], style="nope", quiet=True)
+
+    def test_bundle_from_before_figure_options(self, made, tmp_path):
+        """Old recipes name one PNG and its resolution in `save`."""
+        _, nc = made
+        b = bundle.read_bundle(nc)
+        rec = bundle.recipe(b)
+        del rec["figure"]
+        rec["save"] = {"filename": "profile.png", "dpi": 150, "tight_bbox": True}
+        b.attrs["gs2ew_recipe"] = json.dumps(rec)
+        old = tmp_path / "old" / "profile.nc"
+        old.parent.mkdir()
+        b.to_netcdf(old)
+
+        figure = bundle.replot(old, quiet=True)
+        assert figure == old.with_suffix(".png")
+        assert not old.with_suffix(".pdf").exists()
+
     def test_rejects_other_netcdf(self, ds, tmp_path):
         path = tmp_path / "not_a_bundle.nc"
         ds.to_netcdf(path)
@@ -260,11 +340,10 @@ class TestReproduce:
         reproduced = bundle.reproduce(nc, quiet=True)
         assert reproduced.parent == figure.parent / bundle.REPRODUCED_DIR
         assert reproduced.read_bytes() == figure.read_bytes()
+        # The variable, not the Dataset, whose `created` time differs.
         xr.testing.assert_identical(
-            bundle.reduced_data(bundle.read_bundle(reproduced.with_suffix(".nc")))[
-                ["profile"]
-            ],
-            bundle.reduced_data(bundle.read_bundle(nc))[["profile"]],
+            bundle.read_bundle(reproduced.with_suffix(".nc"))["profile"],
+            bundle.read_bundle(nc)["profile"],
         )
 
     def test_moved_run(self, made, run_dir, tmp_path):

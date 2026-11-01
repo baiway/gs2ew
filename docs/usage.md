@@ -58,5 +58,6 @@ saturation time itself is usually still too early to average from.
 Movies default `tstart` to `"saturation"` rather than the last timestep.
 
 See [Transfer diagnostics](transfer-diagnostics.md) for which plot shows what,
-and [Plot data and provenance](reproducibility.md) for what is saved
-alongside each figure.
+[Figures](figures.md) for formats and styles, and
+[Plot data and provenance](reproducibility.md) for what is saved alongside
+each figure.
