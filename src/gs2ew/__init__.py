@@ -16,9 +16,11 @@ Layout:
 * :mod:`gs2ew.movie` — the frame-loop and ffmpeg driver
 * :mod:`gs2ew.io`, :mod:`gs2ew.metadata`, :mod:`gs2ew.weights` — reading files
 * :mod:`gs2ew.provenance` — code versions, input decks and source identity
+* :mod:`gs2ew.bundle` — the reduced data and provenance saved with each plot
 * :mod:`gs2ew.plots` — the plotting routines themselves
 """
 
+from gs2ew.bundle import read_bundle, replot, reproduce
 from gs2ew.catalog import Drive, available_drives, identity_residual
 from gs2ew.geometry import theta_integral
 from gs2ew.io import RunFiles, detect_saturation_time, find_run, load_gs2_output
@@ -63,6 +65,9 @@ __all__ = [
     "gs2ew_version",
     "identity_residual",
     "load_gs2_output",
+    "read_bundle",
+    "replot",
+    "reproduce",
     "requires_version",
     "resolve_window",
     "theta_integral",
