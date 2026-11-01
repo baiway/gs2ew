@@ -89,6 +89,31 @@ another `nstep` steps, so set `max_sim_time` to stop at a given time.
 GS2 keeps the first input deck in an output it appends to, so gs2ew doesn't
 count these settings as edits to the input file.
 
+## Comparing runs
+
+```bash
+gs2ew compare convergence/ --vary ntheta
+```
+
+draws, in `convergence/gs2ew/`, with a line per run:
+
+| Figure | For |
+| --- | --- |
+| `compare_ntheta_traces` | each field against time, and where each run's window starts: did it saturate? |
+| `compare_ntheta_spectra` | each field's kx and ky spectra: do the fields decay at large k? |
+| `compare_ntheta_scalars` | $\langle|\delta\phi|^2\rangle$, heat flux and net transfers against `ntheta` |
+| `compare_ntheta_theta` | each drive's $N_\mathbf{k}(\theta)$ |
+
+Each run is averaged over its own saturated window, and runs on different
+grids share the union of them. The value of `ntheta` comes from each run's own input deck,
+so `compare` works on any runs, not only a scan's.
+
+Given a directory, it compares the largest set of runs whose decks differ only
+in `--vary`: in a one-at-a-time scan, `base/` and the runs over that
+parameter. `--ignore tripri` lets another parameter differ too, for one paired
+with the varied one. Their bundles record every run, and `reproduce` checks
+each one's UUID.
+
 ## From Python
 
 Points are lists of dicts, so scans combine:

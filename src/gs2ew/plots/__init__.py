@@ -5,6 +5,7 @@ bundle can be replotted or reproduced by name.
 """
 
 from gs2ew.plots import (  # noqa: F401
+    compare,
     fields,
     transfer_spectral,
     transfer_summary,

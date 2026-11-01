@@ -15,10 +15,10 @@ matplotlib.use("Agg")
 
 from gs2ew import bundle, catalog
 from gs2ew.catalog import Drive
-from gs2ew.plots import fields, transfer_spectral, transfer_summary, transfer_surface
-from gs2ew.plots import transfer_theta, transfer_time, transfer_tp, weights
+from gs2ew.plots import compare, fields, transfer_spectral, transfer_summary
+from gs2ew.plots import transfer_surface, transfer_theta, transfer_time, transfer_tp, weights
 
-from conftest import make_dataset
+from conftest import SYNTHETIC_DECK, make_dataset
 
 
 def assert_replots_identically(figure):
@@ -67,6 +67,37 @@ BUNDLED_PLOTS = {
     "weights": (weights.plot_weights, {}),
     "wl_by_lambda": (weights.plot_wl_by_lambda, {"ncols": 4}),
 }
+
+
+def compared_with_a_finer_run(plot):
+    """`plot`, comparing the dataset given with one at ntheta = 16 on a finer
+    theta grid, so it fits the single-dataset tests below."""
+
+    def compared(ds, **kwargs):
+        finer = make_dataset(
+            ntheta=17, deck=SYNTHETIC_DECK.replace("ntheta = 8", "ntheta = 16"), seed=1
+        )
+        return plot([ds, finer], "ntheta", **kwargs)
+
+    return compared
+
+
+BUNDLED_PLOTS["compare_scalars"] = (
+    compared_with_a_finer_run(compare.plot_compare_scalars),
+    {"window": 30.0},
+)
+BUNDLED_PLOTS["compare_traces"] = (
+    compared_with_a_finer_run(compare.plot_compare_traces),
+    {"tstart": 30.0},
+)
+BUNDLED_PLOTS["compare_spectra"] = (
+    compared_with_a_finer_run(compare.plot_compare_spectra),
+    {"window": 30.0},
+)
+BUNDLED_PLOTS["compare_theta"] = (
+    compared_with_a_finer_run(compare.plot_compare_theta),
+    {"quantities": ["U", "S"], "normalise": True},
+)
 
 
 class TestBundles:

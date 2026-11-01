@@ -22,6 +22,10 @@ records:
   versions of Python and the numerical libraries;
 * the GS2 output's path, size and UUID, and the input deck it was run with.
 
+A plot comparing several runs (see :mod:`gs2ew.plots.compare`) is made from a
+list of datasets: its bundle keeps each run's input deck along a ``run``
+dimension, and each run's path, UUID and GS2 version in ``gs2ew_sources``.
+
 From a bundle, :func:`replot` redraws the figure in seconds without the raw
 output, and :func:`reproduce` repeats the whole analysis from the raw output,
 after checking it is the same run.
@@ -37,7 +41,8 @@ import inspect
 import json
 import shlex
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,8 +74,8 @@ REPRODUCED_DIR = "reproduced"
 class PlotSpec:
     """How to make one kind of plot.
 
-    `compute` takes the GS2 dataset and returns the reduced data; it must also
-    accept ``quiet``. `render` takes that reduced data and returns a figure.
+    `compute` takes the GS2 dataset, or a list of them for a plot comparing
+    runs, and returns the reduced data; it must also accept ``quiet``. `render` takes that reduced data and returns a figure.
     `filename` picks the default output filename, without a suffix, from the
     reduced data (for example to mark a window average).
     """
@@ -79,6 +84,11 @@ class PlotSpec:
     compute: Callable[..., xr.Dataset]
     render: Callable[..., Figure]
     filename: Callable[[xr.Dataset], str]
+
+
+#: The GS2 output a plot is made from: one run's dataset, or a list of them,
+#: one per run, for a plot comparing runs.
+Sources = xr.Dataset | Sequence[xr.Dataset]
 
 
 #: Every registered plot, by name. Populated as the plot modules are imported.
@@ -111,7 +121,7 @@ def get_spec(name: str) -> PlotSpec:
 
 def make_plot(
     name: str,
-    ds: xr.Dataset,
+    ds: Sources,
     compute_options: dict[str, Any],
     render_options: dict[str, Any] | None = None,
     output_dir: str | Path = "outputs",
@@ -352,25 +362,67 @@ def _source_run(ds: xr.Dataset):
         return None
 
 
-def provenance_attrs(ds: xr.Dataset) -> dict[str, str]:
-    """Every provenance attribute a bundle made from `ds` carries."""
-    gs2 = provenance.gs2_version(ds)
-    gs2ew = provenance.gs2ew_version()
-    _warn_if_dirty(gs2)
-    _warn_if_dirty(gs2ew)
+def provenance_attrs(ds: Sources) -> dict[str, str]:
+    """Every provenance attribute a bundle made from `ds` carries.
 
-    attrs = {
-        **gs2.attrs(),
+    For several runs, each one's GS2 version and identity go in
+    ``gs2ew_sources``, as a JSON list in the order of the runs; the GS2
+    version attributes are those the runs share, or ``"mixed"``.
+    """
+    gs2ew = provenance.gs2ew_version()
+    _warn_if_dirty(gs2ew)
+    common = {
         **gs2ew.attrs(),
-        **provenance.source_identity(ds),
         "dependency_versions": json.dumps(provenance.dependency_versions()),
     }
-    return attrs
+    if isinstance(ds, xr.Dataset):
+        gs2 = provenance.gs2_version(ds)
+        _warn_if_dirty(gs2)
+        return {**gs2.attrs(), **provenance.source_identity(ds), **common}
+
+    sources = []
+    for run in ds:
+        gs2 = provenance.gs2_version(run)
+        _warn_if_dirty(gs2)
+        sources.append({**gs2.attrs(), **provenance.source_identity(run)})
+    shared = {
+        key: value if all(source[key] == value for source in sources) else "mixed"
+        for key, value in sources[0].items()
+        if key.startswith("gs2_")
+    }
+    return {**shared, "gs2ew_sources": json.dumps(sources), **common}
+
+
+def _record_decks(out: xr.Dataset, ds: Sources) -> str:
+    """Add the input decks of `ds` to `out`, and say where they came from.
+
+    One run's go in scalar ``input_file`` and ``used_input_file``; several
+    runs' along the ``run`` dimension, if every run has one.
+    """
+    runs = [ds] if isinstance(ds, xr.Dataset) else list(ds)
+    decks = [_input_deck(run) for run in runs]
+    used = [provenance.input_deck(run, used=True) for run in runs]
+    dims: tuple[str, ...] = () if isinstance(ds, xr.Dataset) else ("run",)
+
+    def value(texts: list[str | None]):
+        return texts[0] if not dims else np.array(texts, dtype=object)
+
+    if all(deck is not None for deck, _ in decks):
+        out["input_file"] = (dims, value([d for d, _ in decks]), {"long_name": "GS2 input file"})
+    if all(u is not None for u in used):
+        out["used_input_file"] = (
+            dims,
+            value(used),
+            {"long_name": "GS2 input file with every default filled in"},
+        )
+    if not dims:
+        return decks[0][1]
+    return "; ".join(f"run {i}: {origin}" for i, (_, origin) in enumerate(decks))
 
 
 def write_bundle(
     reduced: xr.Dataset,
-    ds: xr.Dataset,
+    ds: Sources,
     recipe: dict[str, Any],
     path: str | Path,
     quiet: bool = False,
@@ -384,16 +436,7 @@ def write_bundle(
     for name in out.variables:
         out[name].attrs = _netcdf_attrs(dict(out[name].attrs))
 
-    deck, deck_origin = _input_deck(ds)
-    if deck is not None:
-        out["input_file"] = ((), deck, {"long_name": "GS2 input file"})
-    used = provenance.input_deck(ds, used=True)
-    if used is not None:
-        out["used_input_file"] = (
-            (),
-            used,
-            {"long_name": "GS2 input file with every default filled in"},
-        )
+    deck_origin = _record_decks(out, ds)
 
     style_text = style.style_file(recipe["figure"]["style"])
     if style_text is not None:
@@ -598,16 +641,38 @@ def replot(
         updated.to_netcdf(target, engine="netcdf4")
         write_reproduce_script(target.parent)
         if "input_file" in bundle:
-            # Replotting into a new directory: bring the input deck along.
-            source = Path(bundle.attrs.get("source_path", UNKNOWN)).name
-            name = source[: -len(OUTPUT_SUFFIX)] if source.endswith(OUTPUT_SUFFIX) else "input"
-            deck = target.parent / f"{name}.in"
-            if not deck.exists():
-                deck.write_text(bundle["input_file"].item())
+            # Replotting into a new directory: bring the input decks along.
+            for name, text in _bundle_decks(bundle):
+                deck = target.parent / f"{name}.in"
+                if not deck.exists():
+                    deck.write_text(text)
         if not quiet:
             print(f"Saved {target}")
 
     return figure
+
+
+def _bundle_decks(bundle: xr.Dataset) -> list[tuple[str, str]]:
+    """(run name, input deck) for each run recorded in `bundle`."""
+    if bundle["input_file"].ndim == 0:
+        paths = [bundle.attrs.get("source_path", UNKNOWN)]
+        texts = [bundle["input_file"].item()]
+    else:
+        paths = [s.get("source_path", UNKNOWN) for s in _sources(bundle)]
+        texts = [str(t) for t in bundle["input_file"].values]
+    return [(_run_name(path), text) for path, text in zip(paths, texts)]
+
+
+def _run_name(source_path: str) -> str:
+    name = Path(source_path).name
+    return name[: -len(OUTPUT_SUFFIX)] if name.endswith(OUTPUT_SUFFIX) else "input"
+
+
+def _sources(bundle: xr.Dataset | dict[str, Any]) -> list[dict[str, str]] | None:
+    """The runs a bundle comparing several was made from, or None."""
+    attrs = bundle.attrs if isinstance(bundle, xr.Dataset) else bundle
+    text = attrs.get("gs2ew_sources")
+    return None if text is None else json.loads(text)
 
 
 class SourceMismatchError(RuntimeError):
@@ -625,7 +690,8 @@ def reproduce(
     `run` is the run directory or ``.out.nc`` to read; by default the path
     recorded in the bundle. Before anything is computed, the output's UUID is
     checked against the recorded one, so a moved or renamed run is fine but a
-    different run is refused.
+    different run is refused. A bundle comparing several runs reads each from
+    its recorded path, and takes no `run`.
 
     Results go to a ``reproduced/`` directory next to the bundle unless
     `output_dir` is given, so the original is kept for comparison.
@@ -638,6 +704,31 @@ def reproduce(
     path = Path(path)
     bundle = read_bundle(path)
     rec = recipe(bundle)
+    if output_dir is None:
+        output_dir = path.parent / REPRODUCED_DIR
+    stem, options = _recorded_options(rec)
+    remake = dict(
+        output_dir=output_dir,
+        filename=stem,
+        tight_bbox=rec["save"].get("tight_bbox", False),
+        quiet=quiet,
+        options=options,
+    )
+
+    sources = _sources(bundle)
+    if sources is not None:
+        if run is not None:
+            raise ValueError(
+                f"{path.name} compares several runs, each read from where it was."
+            )
+        with ExitStack() as stack:
+            datasets = []
+            for source in sources:
+                out_nc = find_run(source["source_path"]).out_nc
+                ds = stack.enter_context(load_gs2_output(out_nc))
+                _check_source(source.get("source_id", UNKNOWN), ds, out_nc, path)
+                datasets.append(ds)
+            return make_plot(rec["plot"], datasets, rec["compute"], rec["render"], **remake)
 
     if run is None:
         recorded = bundle.attrs.get("source_path", UNKNOWN)
@@ -649,34 +740,23 @@ def reproduce(
         run = recorded
     out_nc = find_run(run).out_nc
 
-    if output_dir is None:
-        output_dir = path.parent / REPRODUCED_DIR
-
     with load_gs2_output(out_nc) as ds:
-        expected = bundle.attrs.get("source_id", UNKNOWN)
-        actual = str(ds.attrs.get("id", UNKNOWN))
-        if expected != UNKNOWN and actual != expected:
-            raise SourceMismatchError(
-                f"{out_nc} is GS2 run {actual}, but {path.name} was made from "
-                f"run {expected}."
-            )
-        if expected == UNKNOWN:
-            print(
-                "Warning: the recorded GS2 output has no run UUID, so it cannot "
-                "be checked that this is the same run."
-            )
+        _check_source(bundle.attrs.get("source_id", UNKNOWN), ds, out_nc, path)
+        return make_plot(rec["plot"], ds, rec["compute"], rec["render"], **remake)
 
-        stem, options = _recorded_options(rec)
-        return make_plot(
-            rec["plot"],
-            ds,
-            rec["compute"],
-            rec["render"],
-            output_dir=output_dir,
-            filename=stem,
-            tight_bbox=rec["save"].get("tight_bbox", False),
-            quiet=quiet,
-            options=options,
+
+def _check_source(expected: str, ds: xr.Dataset, out_nc: Path, bundle: Path) -> None:
+    """Refuse `ds` unless it is the GS2 run with UUID `expected`."""
+    actual = str(ds.attrs.get("id", UNKNOWN))
+    if expected != UNKNOWN and actual != expected:
+        raise SourceMismatchError(
+            f"{out_nc} is GS2 run {actual}, but {bundle.name} was made from "
+            f"run {expected}."
+        )
+    if expected == UNKNOWN:
+        print(
+            f"Warning: {out_nc} has no recorded run UUID, so it cannot be "
+            "checked that this is the same run."
         )
 
 
@@ -684,11 +764,11 @@ def reproduce(
 
 
 def write_run_files(
-    ds: xr.Dataset, output_dir: str | Path, quiet: bool = False
+    ds: Sources, output_dir: str | Path, quiet: bool = False
 ) -> list[Path]:
-    """Write the run's input deck and ``reproduce.sh`` into `output_dir`.
+    """Write the runs' input decks and ``reproduce.sh`` into `output_dir`.
 
-    The deck is written as ``<run name>.in``. ``reproduce.sh`` is regenerated
+    Each deck is written as ``<run name>.in``. ``reproduce.sh`` is regenerated
     from every bundle in `output_dir`, so it stays complete however many
     times plots are added.
     """
@@ -696,13 +776,14 @@ def write_run_files(
     output_dir.mkdir(parents=True, exist_ok=True)
     written = []
 
-    deck, _ = _input_deck(ds)
-    if deck is not None:
-        run = _source_run(ds)
-        name = run.name if run is not None else "input"
-        deck_path = output_dir / f"{name}.in"
-        deck_path.write_text(deck)
-        written.append(deck_path)
+    for run in [ds] if isinstance(ds, xr.Dataset) else ds:
+        deck, _ = _input_deck(run)
+        if deck is not None:
+            files = _source_run(run)
+            name = files.name if files is not None else "input"
+            deck_path = output_dir / f"{name}.in"
+            deck_path.write_text(deck)
+            written.append(deck_path)
 
     written.append(write_reproduce_script(output_dir))
 
@@ -763,7 +844,11 @@ def reproduce_script(directory: str | Path) -> str:
                     f"#   WARNING: {code} had uncommitted changes, so its commit "
                     "does not pin this result."
                 )
-        lines.append(f"#   source: {attrs.get('source_path', UNKNOWN)}")
+        sources = _sources(attrs)
+        if sources is None:
+            lines.append(f"#   source: {attrs.get('source_path', UNKNOWN)}")
+        for source in sources or []:
+            lines.append(f"#   source: {source.get('source_path', UNKNOWN)}")
         lines.append(str(attrs.get("reproduce_command")))
         lines.append("")
 
@@ -775,6 +860,7 @@ __all__ = [
     "PLOTS",
     "PlotSpec",
     "SourceMismatchError",
+    "Sources",
     "data_differences",
     "get_spec",
     "make_plot",

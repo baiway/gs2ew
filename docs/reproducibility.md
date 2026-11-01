@@ -16,6 +16,9 @@ gs2ew replot RUN/gs2ew/transfer_theta_averaged.nc --set width=3.4    # restyled
 gs2ew reproduce RUN/gs2ew/*.nc                        # redo the analysis and compare
 ```
 
+A figure comparing runs (`gs2ew compare`) has a bundle holding every run's
+input deck, path, UUID and GS2 version.
+
 `reproduce` checks the run UUID first, writes to `reproduced/`, and reports
 whether the data match. `reproduce.sh` pins each command to gs2ew's exact commit
 with `uvx`. Pass `--require-clean` to `plot` to refuse to run from uncommitted

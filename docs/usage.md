@@ -8,6 +8,7 @@ uv run gs2ew plot RUN                        # the standard plot set, in RUN/gs2
 uv run gs2ew plot RUN --only transfer_theta transfer_summary
 uv run gs2ew plot RUN -o outputs/ --movies
 uv run gs2ew batch project/ --skip cbc       # every run under project/
+uv run gs2ew compare scan/ --vary ntheta     # runs that differ in one parameter
 ```
 
 `RUN` is a run directory holding one `*.out.nc`, or the `*.out.nc` itself.

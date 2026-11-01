@@ -28,6 +28,20 @@ from gs2ew.geometry import theta_integral
 from gs2ew.io import RunFiles, detect_saturation_time, find_run, load_gs2_output
 from gs2ew.metadata import get_metadata, get_version, requires_version
 from gs2ew.provenance import CodeVersion, gs2_version, gs2ew_version
+from gs2ew.plots.compare import (
+    compute_compare_scalars,
+    compute_compare_spectra,
+    compute_compare_theta,
+    compute_compare_traces,
+    plot_compare_scalars,
+    plot_compare_spectra,
+    plot_compare_theta,
+    plot_compare_traces,
+    render_compare_scalars,
+    render_compare_spectra,
+    render_compare_theta,
+    render_compare_traces,
+)
 from gs2ew.plots.fields import (
     compute_fields_by_mode,
     compute_fields_time_traces,
@@ -118,13 +132,25 @@ __all__ = [
     "resolve_window",
     "theta_integral",
     # Fields
+    "compute_compare_scalars",
+    "compute_compare_spectra",
+    "compute_compare_theta",
+    "compute_compare_traces",
     "compute_fields_by_mode",
     "compute_fields_time_traces",
     "compute_phi2_by_theta",
+    "plot_compare_scalars",
+    "plot_compare_spectra",
+    "plot_compare_theta",
+    "plot_compare_traces",
     "plot_fields_by_mode",
     "plot_fields_time_traces",
     "plot_phi2_by_theta",
     "plot_phi2_by_theta_movie",
+    "render_compare_scalars",
+    "render_compare_spectra",
+    "render_compare_theta",
+    "render_compare_traces",
     "render_fields_by_mode",
     "render_fields_time_traces",
     "render_phi2_by_theta",
