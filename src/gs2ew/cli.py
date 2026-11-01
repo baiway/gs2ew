@@ -187,12 +187,12 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
     # they take the quantity selection but not the kinetic options.
     select = dict(quantities=args.quantities, include_kinetic=not args.no_kinetic)
     tp_select = dict(quantities=args.quantities)
-    data = dict(save_data=not args.no_data)
-    out = dict(output_dir=output_dir)
+    # Each static plot saves its data alongside; movies have none to save.
+    out = dict(output_dir=output_dir, save_data=not args.no_data)
 
     plots: list[tuple[str, Callable[[], object]]] = [
         ("fields_time_traces", partial(fields.plot_fields_time_traces, ds, **out)),
-        ("fields_by_mode", partial(fields.plot_fields_by_mode, ds, **out, **data)),
+        ("fields_by_mode", partial(fields.plot_fields_by_mode, ds, **out)),
         ("phi2_by_theta", partial(fields.plot_phi2_by_theta, ds, **out)),
         (
             "transfer_theta",
@@ -203,7 +203,6 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
                 **out,
                 **window_opts,
                 **select,
-                **data,
             ),
         ),
         (
@@ -271,7 +270,7 @@ def _plot_all(ds: xr.Dataset, args: argparse.Namespace, output_dir: Path) -> Non
         ]
 
     if args.movies:
-        movie_opts = dict(fps=args.fps, stride=args.stride, **out)
+        movie_opts = dict(fps=args.fps, stride=args.stride, output_dir=output_dir)
         plots += [
             (
                 "transfer_theta",

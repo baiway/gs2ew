@@ -28,32 +28,61 @@ from gs2ew.metadata import get_metadata, get_version, requires_version
 from gs2ew.provenance import CodeVersion, gs2_version, gs2ew_version
 from gs2ew.plots.fields import (
     compute_fields_by_mode,
+    compute_fields_time_traces,
+    compute_phi2_by_theta,
     plot_fields_by_mode,
     plot_fields_time_traces,
     plot_phi2_by_theta,
     plot_phi2_by_theta_movie,
     render_fields_by_mode,
+    render_fields_time_traces,
+    render_phi2_by_theta,
 )
 from gs2ew.plots.transfer_spectral import (
+    compute_transfer_spectral,
+    compute_transfer_spectrum,
     plot_transfer_spectral,
     plot_transfer_spectral_movie,
     plot_transfer_spectrum,
+    render_transfer_spectral,
+    render_transfer_spectrum,
 )
-from gs2ew.plots.transfer_summary import plot_transfer_summary
+from gs2ew.plots.transfer_summary import (
+    compute_transfer_summary,
+    plot_transfer_summary,
+    render_transfer_summary,
+)
 from gs2ew.plots.transfer_theta import (
     compute_transfer_theta,
     plot_transfer_theta,
     plot_transfer_theta_movie,
     render_transfer_theta,
 )
-from gs2ew.plots.transfer_time import plot_transfer_butterfly, plot_transfer_hovmoller
+from gs2ew.plots.transfer_time import (
+    compute_transfer_butterfly,
+    compute_transfer_hovmoller,
+    plot_transfer_butterfly,
+    plot_transfer_hovmoller,
+    render_transfer_butterfly,
+    render_transfer_hovmoller,
+)
 from gs2ew.plots.transfer_tp import (
+    compute_transfer_trapped_passing,
+    compute_transfer_trapped_passing_spectral,
     plot_transfer_trapped_passing,
     plot_transfer_trapped_passing_movie,
     plot_transfer_trapped_passing_spectral,
     plot_transfer_trapped_passing_spectral_movie,
+    render_transfer_trapped_passing,
+    render_transfer_trapped_passing_spectral,
 )
-from gs2ew.plots.weights import plot_weights, plot_wl_by_lambda
+from gs2ew.plots.weights import (
+    compute_weights,
+    plot_weights,
+    plot_wl_by_lambda,
+    render_weights,
+    render_wl_by_lambda,
+)
 from gs2ew.timebase import TimeWindow, frame_indices, resolve_window
 
 __all__ = [
@@ -80,13 +109,24 @@ __all__ = [
     "theta_integral",
     # Fields
     "compute_fields_by_mode",
+    "compute_fields_time_traces",
+    "compute_phi2_by_theta",
     "plot_fields_by_mode",
     "plot_fields_time_traces",
     "plot_phi2_by_theta",
     "plot_phi2_by_theta_movie",
     "render_fields_by_mode",
+    "render_fields_time_traces",
+    "render_phi2_by_theta",
     # Transfer
+    "compute_transfer_butterfly",
+    "compute_transfer_hovmoller",
+    "compute_transfer_spectral",
+    "compute_transfer_spectrum",
+    "compute_transfer_summary",
     "compute_transfer_theta",
+    "compute_transfer_trapped_passing",
+    "compute_transfer_trapped_passing_spectral",
     "plot_transfer_butterfly",
     "plot_transfer_hovmoller",
     "plot_transfer_spectral",
@@ -99,8 +139,18 @@ __all__ = [
     "plot_transfer_trapped_passing_movie",
     "plot_transfer_trapped_passing_spectral",
     "plot_transfer_trapped_passing_spectral_movie",
+    "render_transfer_butterfly",
+    "render_transfer_hovmoller",
+    "render_transfer_spectral",
+    "render_transfer_spectrum",
+    "render_transfer_summary",
     "render_transfer_theta",
+    "render_transfer_trapped_passing",
+    "render_transfer_trapped_passing_spectral",
     # Weights
+    "compute_weights",
     "plot_weights",
     "plot_wl_by_lambda",
+    "render_weights",
+    "render_wl_by_lambda",
 ]

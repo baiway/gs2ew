@@ -15,7 +15,7 @@ matplotlib.use("Agg")
 from gs2ew import bundle, catalog
 from gs2ew.catalog import Drive
 from gs2ew.plots import fields, transfer_spectral, transfer_summary
-from gs2ew.plots import transfer_theta, transfer_time, transfer_tp
+from gs2ew.plots import transfer_theta, transfer_time, transfer_tp, weights
 
 from conftest import make_dataset
 
@@ -25,6 +25,110 @@ def assert_replots_identically(figure):
     original = figure.read_bytes()
     figure.unlink()
     assert bundle.replot(figure.with_suffix(".nc"), quiet=True).read_bytes() == original
+
+
+#: (plot function, keyword arguments) covering every registered plot, run on
+#: a synthetic dataset with everything in it.
+BUNDLED_PLOTS = {
+    "fields_time_traces": (fields.plot_fields_time_traces, {}),
+    "fields_by_mode": (fields.plot_fields_by_mode, {}),
+    "phi2_by_theta": (fields.plot_phi2_by_theta, {"window": 30.0, "ylim": (0, 50)}),
+    "transfer_theta": (transfer_theta.plot_transfer_theta, {"show_std": True, "window": 30.0}),
+    "transfer_summary": (transfer_summary.plot_transfer_summary, {}),
+    "transfer_hovmoller": (
+        transfer_time.plot_transfer_hovmoller,
+        {"tstart": 20.0, "share": "all"},
+    ),
+    "transfer_butterfly": (
+        transfer_time.plot_transfer_butterfly,
+        {"reduction": "kysource", "klim": 0.5},
+    ),
+    "transfer_spectral": (
+        transfer_spectral.plot_transfer_spectral,
+        {"reduction": "kxsource", "klim": 0.5, "tstart": "saturation"},
+    ),
+    "transfer_spectrum": (
+        transfer_spectral.plot_transfer_spectrum,
+        {"klim": 0.5, "jacobian": False},
+    ),
+    "transfer_trapped_passing": (
+        transfer_tp.plot_transfer_trapped_passing,
+        {"show_std": True, "window": 30.0, "normalise": True},
+    ),
+    "transfer_trapped_passing_spectral": (
+        transfer_tp.plot_transfer_trapped_passing_spectral,
+        {"quantity": "U_flr", "field": "apar", "klim": 0.5},
+    ),
+    "weights": (weights.plot_weights, {}),
+    "wl_by_lambda": (weights.plot_wl_by_lambda, {"ncols": 4}),
+}
+
+
+class TestBundles:
+    """Every plot saves a bundle that redraws it exactly."""
+
+    def test_every_plot_is_covered(self):
+        assert set(BUNDLED_PLOTS) == set(bundle.PLOTS) - {"test_profile"}
+
+    @pytest.mark.parametrize("name", list(BUNDLED_PLOTS))
+    def test_replots_from_its_bundle(self, name, tmp_path):
+        ds = make_dataset(potential=True, weights=True)
+        plot, kwargs = BUNDLED_PLOTS[name]
+        figure = plot(ds, output_dir=tmp_path, quiet=True, **kwargs)
+        b = bundle.read_bundle(figure.with_suffix(".nc"))
+        assert b.attrs["gs2ew_plot"] == name
+        assert_replots_identically(figure)
+
+    @pytest.mark.parametrize("name", list(BUNDLED_PLOTS))
+    def test_no_data(self, name, tmp_path):
+        ds = make_dataset(potential=True, weights=True)
+        plot, kwargs = BUNDLED_PLOTS[name]
+        plot(ds, output_dir=tmp_path, save_data=False, quiet=True, **kwargs)
+        assert not list(tmp_path.glob("*.nc"))
+
+    def test_klim_only_affects_the_figure(self, ds, tmp_path):
+        figure = transfer_spectral.plot_transfer_spectral(
+            ds, klim=0.5, output_dir=tmp_path, quiet=True
+        )
+        b = bundle.read_bundle(figure.with_suffix(".nc"))
+        assert b.sizes["kxt_shift"] == ds.sizes["kxt_shift"]
+        assert bundle.recipe(b)["render"]["klim"] == 0.5
+
+    def test_summary_matches_the_theta_integral(self, ds):
+        from gs2ew.geometry import theta_integral
+
+        reduced = transfer_summary.compute_transfer_summary(ds, window=30.0, quiet=True)
+        name = "free_energy_transfer_apar_theta"
+        series = theta_integral(ds[name], ds).sel(t=slice(70.0, 100.0))
+        assert float(reduced[name]) == pytest.approx(float(series.mean("t")))
+        assert float(reduced[f"{name}_std"]) == pytest.approx(float(series.std("t")))
+        totals = reduced["fluctuation_energy_transfer_trapped_passing"]
+        assert totals.dims == ("species", "tp")
+
+    def test_trapped_passing_norm_factors_recorded_by_key(self, ds, tmp_path):
+        figure = transfer_tp.plot_transfer_trapped_passing(
+            ds,
+            normalise=True,
+            norm_factors={(Drive("U", "phi"), 0, 2): 3.0},
+            quantities=["U"],
+            output_dir=tmp_path,
+            quiet=True,
+        )
+        rec = bundle.recipe(bundle.read_bundle(figure.with_suffix(".nc")))
+        assert rec["render"]["norm_factors"] == {
+            "fluctuation_energy_transfer_phi_trapped_passing:0:2": 3.0
+        }
+
+    def test_phi2_by_theta_drops_the_ky_coordinate(self):
+        ds = make_dataset(potential=True)
+        reduced = fields.compute_phi2_by_theta(ds, quiet=True)
+        assert set(reduced.coords) == {"theta"}
+
+    def test_time_traces_record_saturation(self, ds):
+        from gs2ew.io import detect_saturation_time
+
+        reduced = fields.compute_fields_time_traces(ds, window=10.0, quiet=True)
+        assert reduced.attrs["tsat"] == detect_saturation_time(ds, window=10.0)
 
 
 class TestTransferTheta:

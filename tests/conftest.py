@@ -79,6 +79,8 @@ def make_dataset(
     split: bool = True,
     metadata: bool = True,
     gs2_state: str = "clean",
+    potential: bool = False,
+    weights: bool = False,
     nt: int = 24,
     ntheta: int = 9,
     nk: int = 7,
@@ -95,6 +97,9 @@ def make_dataset(
     they sum to U only in the `theta` and `kxtarget` reductions; in the
     source-resolved reductions they are independent of U. Only the FLR part
     has trapped/passing output.
+
+    With `potential`, the time-resolved potential ``phi_t`` is included, and
+    with `weights`, the velocity-space weights ``w`` and ``wl``.
 
     With `metadata`, the dataset carries the provenance GS2 records: version
     attributes, a ``build_config`` with git state `gs2_state`, a run UUID,
@@ -186,6 +191,20 @@ def make_dataset(
                     dims,
                     rng.normal(size=shape),
                 )
+
+    if potential:
+        shape = (nt, len(coords["ky"]), len(coords["kx"]), ntheta, 2)
+        data["phi_t"] = (("t", "ky", "kx", "theta", "ri"), rng.normal(size=shape))
+
+    if weights:
+        negrid, nlambda = 5, 6
+        coords["lambda"] = np.linspace(0.0, 1.0, nlambda)
+        data["energy"] = (
+            ("species", "egrid"),
+            np.tile(np.linspace(0.1, 4.0, negrid), (nspec, 1)),
+        )
+        data["w"] = (("species", "egrid"), rng.uniform(size=(nspec, negrid)))
+        data["wl"] = (("lambda", "theta"), rng.uniform(size=(nlambda, ntheta)))
 
     if kinetic:
         for reduction in reductions:

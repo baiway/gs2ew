@@ -106,6 +106,36 @@ def time_std(tw: TimeWindow, da: xr.DataArray) -> xr.DataArray | None:
     return out
 
 
+def derived_attrs(
+    source: xr.DataArray,
+    note: str,
+    cell_methods: str | None = None,
+) -> dict[str, str]:
+    """Attributes for data derived from the GS2 variable `source`.
+
+    Keeps `source`'s ``units`` and appends `note` (e.g. "summed over
+    kxt_shift") to its ``long_name``, so the reduction is recorded alongside
+    the data.
+    """
+    attrs = {}
+    if "units" in source.attrs:
+        attrs["units"] = source.attrs["units"]
+    long_name = source.attrs.get("long_name", source.name)
+    attrs["long_name"] = f"{long_name}, {note}" if long_name else note
+    if cell_methods is not None:
+        attrs["cell_methods"] = cell_methods
+    return attrs
+
+
+def theta_integral_note(jacobian: bool) -> str:
+    """How a theta integral was weighted, for :func:`derived_attrs`."""
+    return (
+        "integrated over theta weighted by jacob"
+        if jacobian
+        else "integrated over theta, unweighted"
+    )
+
+
 def drive_attrs(drive: Drive) -> dict[str, str]:
     """Attributes marking a reduced variable as `drive`'s data.
 
@@ -358,6 +388,8 @@ __all__ = [
     "save_figure",
     "time_mean",
     "time_std",
+    "derived_attrs",
+    "theta_integral_note",
     "drive_attrs",
     "drives_in",
     "frame_values",
