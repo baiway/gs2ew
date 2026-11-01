@@ -45,9 +45,10 @@ made it, so it can be restyled, redrawn or reproduced later.
 - [Transfer diagnostics](docs/transfer-diagnostics.md): what GS2 writes, and
   which plot shows what
 - [Parameter scans](docs/scans.md): writing, submitting and following them
+- [Linear scans](docs/linear.md): a growth-rate spectrum for each point of a scan
 - [Development](docs/development.md): tests and code layout
 
 [`extras/`](extras/) holds the environment files I source before compiling
 GS2 on each machine (`gs2-<system>.sh`). The Slurm templates for running it
-on ARCHER2 and Viking, which `gs2ew scan` uses, are in
+on ARCHER2 and Viking, which `gs2ew scan` and `gs2ew linear` use, are in
 [`src/gs2ew/templates/`](src/gs2ew/templates/).

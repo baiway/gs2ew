@@ -69,12 +69,7 @@ def find_runs(paths: Sequence[str | Path]) -> list[RunFiles]:
 def _decks(ds: xr.Dataset) -> list[f90nml.Namelist]:
     """The input decks GS2 embedded in `ds`: as given, then with every default
     filled in."""
-    found = []
-    for used in (False, True):
-        text = provenance.input_deck(ds, used=used)
-        if text is not None:
-            found.append(f90nml.reads(text))
-    return found
+    return provenance.input_decks(ds)
 
 
 def _resolve(deck: f90nml.Namelist, key: str) -> str | None:

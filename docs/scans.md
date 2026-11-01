@@ -34,6 +34,7 @@ in none because the template leaves it at its default.
 
 `submit` runs `sbatch` in every run directory without output or a job yet,
 records job IDs in `jobs.csv`, and passes anything after `--` to `sbatch`.
+For linear runs, which go many to a job, see [linear scans](linear.md).
 `status` reports each run's exit reason, or its job's state.
 
 ## Core counts

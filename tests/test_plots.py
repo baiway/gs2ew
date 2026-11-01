@@ -15,10 +15,10 @@ matplotlib.use("Agg")
 
 from gs2ew import bundle, catalog
 from gs2ew.catalog import Drive
-from gs2ew.plots import compare, fields, transfer_spectral, transfer_summary
+from gs2ew.plots import compare, fields, linear, transfer_spectral, transfer_summary
 from gs2ew.plots import transfer_surface, transfer_theta, transfer_time, transfer_tp, weights
 
-from conftest import SYNTHETIC_DECK, make_dataset
+from conftest import SYNTHETIC_DECK, make_dataset, make_linear_dataset
 
 
 def assert_replots_identically(figure):
@@ -98,6 +98,26 @@ BUNDLED_PLOTS["compare_theta"] = (
     compared_with_a_finer_run(compare.plot_compare_theta),
     {"quantities": ["U", "S"], "normalise": True},
 )
+
+
+def a_linear_scan(plot, **fixed):
+    """`plot`, of synthetic linear runs at two betas and three ky, in place
+    of the dataset given."""
+
+    def plotted(ds, **kwargs):
+        runs = [
+            make_linear_dataset(ky=ky, beta=beta, gamma=0.2 - abs(ky - 0.3) - beta, t_end=t_end)
+            for beta in (0.0, 0.01)
+            for ky, t_end in ((0.1, 20.0), (0.3, 20.0), (1.0, 100.0))
+        ]
+        return plot(runs, **fixed, **kwargs)
+
+    return plotted
+
+
+BUNDLED_PLOTS["linear_spectrum"] = (a_linear_scan(linear.plot_linear_spectrum, vary="beta"), {})
+BUNDLED_PLOTS["linear_gamma_max"] = (a_linear_scan(linear.plot_linear_gamma_max, vary="beta"), {})
+BUNDLED_PLOTS["linear_modes"] = (a_linear_scan(linear.plot_linear_modes, vary="beta"), {"ky": 1.0})
 
 
 class TestBundles:

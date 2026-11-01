@@ -189,6 +189,7 @@ def write(
     machine: str | Path | None = "archer2",
     derive: Callable[[Point, f90nml.Namelist], Point] | None = None,
     ingen: str | Path | None = None,
+    settings: Point | None = None,
 ) -> list[Path]:
     """Write a run directory for each of `points` under `directory`.
 
@@ -213,6 +214,10 @@ def write(
         GS2's ``ingen``, run on each input file for the ``.report`` giving
         its grid sizes exactly, which the core-count checks then use; see
         :func:`submit`. Without it, they use an estimate.
+    settings : dict, optional
+        Values to set in every run, whatever its point, recorded once in
+        ``scan.json`` rather than in each run's values. A point's own values
+        take precedence.
 
     Returns
     -------
@@ -234,7 +239,13 @@ def write(
     if directory.exists() and any(directory.iterdir()):
         raise FileExistsError(f"{directory} already exists and is not empty.")
 
-    deck = f90nml.read(template)
+    template_deck = f90nml.read(template)
+    fixed = {}
+    for key, value in (settings or {}).items():
+        resolved = resolve_key(template_deck, key)
+        fixed[resolved] = _like_template(template_deck, resolved, value)
+    # What every run starts from: the template with the settings applied.
+    deck = _apply(template_deck, fixed)
     runs = []
     for point in points:
         values = {}
@@ -279,7 +290,8 @@ def write(
         run_dir = directory / name
         run_dir.mkdir()
         changes = {**values, **derived}
-        f90nml.patch(str(template), _nested(changes), str(run_dir / f"{name}.in"))
+        written = {**{k: v for k, v in fixed.items() if k not in changes}, **changes}
+        f90nml.patch(str(template), _nested(written), str(run_dir / f"{name}.in"))
         for subdirectory in _directories_named(_apply(deck, changes)):
             (run_dir / subdirectory).mkdir(parents=True, exist_ok=True)
         if script is not None:
@@ -295,6 +307,7 @@ def write(
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "command": shlex.join(sys.argv),
         **gs2ew_version().attrs(),
+        "settings": fixed,
         "runs": [
             {"name": name, "values": values, "derived": derived}
             for name, (values, derived) in zip(names, runs)
@@ -985,6 +998,11 @@ def _exit_reasons(run_dir: Path, name: str, job: Mapping[str, str] | None) -> di
 def _open_scan(directory: Path, dry_run: bool) -> tuple[dict, dict[str, dict[str, str]]]:
     """The scan's manifest and jobs, once it's clear jobs can be submitted."""
     manifest = load(directory)
+    if "linear" in manifest:
+        raise ValueError(
+            f"{directory} is a linear scan, whose runs go together through "
+            "multigs2: submit it with `gs2ew linear submit`."
+        )
     if manifest["machine"] is None:
         raise ValueError(f"{directory} was written without a job script.")
     if not dry_run and shutil.which("sbatch") is None:

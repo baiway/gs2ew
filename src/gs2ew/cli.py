@@ -1,6 +1,6 @@
 """Command-line interface.
 
-Seven subcommands::
+Eight subcommands::
 
     gs2ew info  RUN                        # what is in the file
     gs2ew plot  RUN                        # the standard plot set, in RUN/gs2ew/
@@ -9,6 +9,7 @@ Seven subcommands::
     gs2ew reproduce RUN/gs2ew/*.nc         # repeat the analysis from raw output
     gs2ew compare scan/ --vary ntheta      # runs that differ in one parameter
     gs2ew scan write|submit|restart|status # write and run a parameter scan
+    gs2ew linear write|submit|status|plot  # the same, a spectrum for each point
 
 RUN is a run directory holding one ``.out.nc``, or the ``.out.nc`` itself.
 `plot` and `batch` take the same options, so a batch job produces exactly what
@@ -36,7 +37,7 @@ matplotlib.use("Agg")
 
 import xarray as xr
 
-from gs2ew import bundle, catalog, provenance, scan, style
+from gs2ew import bundle, catalog, linear, provenance, scan, style
 from gs2ew.io import OUTPUT_SUFFIX, RunFiles, find_run, load_gs2_output
 from gs2ew.metadata import get_metadata
 from gs2ew.provenance import CodeVersion
@@ -690,6 +691,154 @@ def cmd_scan_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _setting(text: str) -> tuple[str, object]:
+    """Parse ``KEY=VALUE`` for `linear write --set`."""
+    key, sep, value = text.partition("=")
+    if not sep or not key or not value:
+        raise argparse.ArgumentTypeError(f"expected KEY=VALUE, got {text!r}")
+    return key, _scalar(value)
+
+
+def cmd_linear_write(args: argparse.Namespace) -> int:
+    """Write a linear run for each point of a scan at each ky."""
+    import f90nml
+
+    points = SCAN_MODES[args.mode](dict(args.vary or []))
+    machine = None if args.machine == "none" else args.machine
+    try:
+        ky = linear.ky_values(args.ky)
+        if args.box_ky:
+            ky = sorted(set(ky) | set(linear.box_ky(f90nml.read(args.template))))
+        run_dirs = linear.write(
+            args.template,
+            points,
+            ky,
+            args.directory,
+            machine=machine,
+            omega_window=args.omega_window,
+            omegatol=args.omegatol,
+            max_sim_time=args.max_sim_time,
+            theta0=args.theta0,
+            settings=dict(args.set or []),
+        )
+    except (FileExistsError, ValueError) as exc:
+        raise SystemExit(f"gs2ew: {exc}") from None
+    print(f"ky: {', '.join(f'{k:g}' for k in ky)}")
+    print(
+        f"Wrote {len(run_dirs)} run(s), {len(run_dirs) // len(ky)} point(s) at "
+        f"{len(ky)} ky; submit with: gs2ew linear submit {args.directory}"
+    )
+    return 0
+
+
+def cmd_linear_submit(args: argparse.Namespace) -> int:
+    """Submit the runs of a linear scan, through multigs2."""
+    sbatch_args = args.sbatch_args
+    if sbatch_args and sbatch_args[0] == "--":
+        sbatch_args = sbatch_args[1:]
+    try:
+        outcomes = linear.submit(
+            args.directory,
+            jobs=args.jobs,
+            cores_per_run=args.cores_per_run,
+            sbatch_args=sbatch_args,
+            dry_run=args.dry_run,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(f"gs2ew: {exc}") from None
+    width = max((len(name) for name, _ in outcomes), default=0)
+    for name, outcome in outcomes:
+        print(f"{name:<{width}}  {outcome}")
+    return 1 if any(o.startswith("sbatch failed") for _, o in outcomes) else 0
+
+
+def cmd_linear_status(args: argparse.Namespace) -> int:
+    """Report where each run of a linear scan has got to."""
+    try:
+        states = linear.status(args.directory)
+    except FileNotFoundError as exc:
+        raise SystemExit(f"gs2ew: {exc}") from None
+    width = max((len(name) for name, _ in states), default=0)
+    for name, state in states:
+        print(f"{name:<{width}}  {state}")
+    return 0
+
+
+#: Settings `linear submit` sets in each run, which may differ between runs.
+_SUBMIT_KEYS = ("knobs.avail_cpu_time", "knobs.margin_cpu_time")
+
+
+def cmd_linear_plot(args: argparse.Namespace) -> int:
+    """Draw the spectra of linear runs."""
+    from gs2ew.plots import compare
+    from gs2ew.plots import linear as linear_plots
+
+    if _gs2ew_unclean(args):
+        return 1
+    try:
+        runs = compare.find_runs(args.runs)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(f"gs2ew: {exc}") from None
+    if not runs:
+        raise SystemExit(f"gs2ew: no {OUTPUT_SUFFIX} files in {', '.join(args.runs)}")
+    vary = args.vary
+    if vary is None and len(args.runs) == 1:
+        vary = linear.scanned_key(args.runs[0])
+        if vary is not None:
+            print(f"A line for each {vary.split('.')[-1]}, the parameter the scan varies.")
+    if args.output_dir is not None:
+        output_dir = Path(args.output_dir)
+    elif len(args.runs) == 1 and Path(args.runs[0]).is_dir():
+        output_dir = Path(args.runs[0]) / DEFAULT_OUTPUT_DIR
+    else:
+        output_dir = Path(os.path.commonpath([r.run_dir for r in runs])) / DEFAULT_OUTPUT_DIR
+
+    with ExitStack() as stack:
+        datasets = [stack.enter_context(load_gs2_output(r.out_nc)) for r in runs]
+        if len(datasets) > 1:
+            key = vary or linear.KY_KEY
+            ignore = [*([linear.KY_KEY] if vary else []), *_SUBMIT_KEYS, *args.ignore]
+            try:
+                chosen = compare.comparable(datasets, key, ignore)
+            except ValueError as exc:
+                raise SystemExit(f"gs2ew: {exc}") from None
+            labels = compare.run_labels(datasets)
+            left = [labels[i] for i in range(len(datasets)) if i not in chosen]
+            if left:
+                print(f"Leaving out {len(left)} run(s) that differ in more than ky"
+                      f"{' and ' + vary if vary else ''}: {', '.join(left)}")
+            datasets = [datasets[i] for i in chosen]
+        if args.require_clean:
+            for ds in datasets:
+                reason = _unclean(provenance.gs2_version(ds))
+                if reason is not None:
+                    print(f"{ds.encoding.get('source')}: {reason}")
+                    return 1
+
+        try:
+            spectrum = linear_plots.compute_linear_spectrum(datasets, vary)
+        except ValueError as exc:
+            raise SystemExit(f"gs2ew: {exc}") from None
+        print(f"{len(datasets)} run(s):")
+        for line in linear.summary(spectrum):
+            print(f"  {line}")
+
+        options = dict(output_dir=output_dir, save_data=not args.no_data)
+        plots = [
+            ("spectrum", linear_plots.plot_linear_spectrum, dict(vary=vary)),
+            ("modes", linear_plots.plot_linear_modes, dict(vary=vary, ky=args.ky)),
+        ]
+        if vary is not None and spectrum["value"].dtype.kind in "fiu" and spectrum.sizes["value"] > 1:
+            plots.insert(1, ("gamma_max", linear_plots.plot_linear_gamma_max, dict(vary=vary)))
+        with style.figure_options(**_figure_options(args)):
+            for name, plot, extra in plots:
+                try:
+                    plot(datasets, **extra, **options)
+                except ValueError as exc:
+                    print(f"No {name} plot: {exc}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gs2ew", description="Post-processing for GS2 output."
@@ -878,6 +1027,146 @@ def build_parser() -> argparse.ArgumentParser:
     status = scan_sub.add_parser("status", help="where each run of a scan has got to")
     status.add_argument("directory", help="the scan directory")
     status.set_defaults(func=cmd_scan_status)
+
+    linear_parser = sub.add_parser(
+        "linear", help="write, submit and plot linear scans: a spectrum for each point"
+    )
+    linear_sub = linear_parser.add_subparsers(dest="linear_command", required=True)
+
+    lwrite = linear_sub.add_parser(
+        "write", help="write a linear run for each point of a scan at each ky"
+    )
+    lwrite.add_argument(
+        "template", help="the GS2 input file each run starts from; a nonlinear one will do"
+    )
+    lwrite.add_argument("directory", help="where to write the scan; must be new or empty")
+    lwrite.add_argument(
+        "--vary",
+        action="append",
+        type=_vary,
+        default=None,
+        metavar="KEY=V1,V2,...",
+        help="a parameter and its values, as for scan write; without it, one "
+        "spectrum, the template's",
+    )
+    lwrite.add_argument(
+        "--mode",
+        choices=list(SCAN_MODES),
+        default="one-at-a-time",
+        help="how --vary parameters combine, as for scan write (default: one-at-a-time)",
+    )
+    lwrite.add_argument(
+        "--ky",
+        default=linear.DEFAULT_KY,
+        help="ky rho as V1,V2,... or MIN:MAX:N, N values evenly spaced in "
+        f"log(ky) (default: {linear.DEFAULT_KY})",
+    )
+    lwrite.add_argument(
+        "--box-ky",
+        action="store_true",
+        help="add the ky of the template's nonlinear box",
+    )
+    lwrite.add_argument(
+        "--theta0", type=float, default=0.0, help="the ballooning angle (default: 0)"
+    )
+    lwrite.add_argument(
+        "--omega-window",
+        type=float,
+        default=linear.DEFAULT_OMEGA_WINDOW,
+        help="the time GS2 averages the frequency over before testing it for "
+        f"convergence, set as navg (default: {linear.DEFAULT_OMEGA_WINDOW:g})",
+    )
+    lwrite.add_argument(
+        "--omegatol", type=float, default=None, help="GS2's convergence tolerance (default: the template's)"
+    )
+    lwrite.add_argument(
+        "--max-sim-time", type=float, default=None, help="when to give up on converging (default: the template's)"
+    )
+    lwrite.add_argument(
+        "--set",
+        action="append",
+        type=_setting,
+        metavar="KEY=VALUE",
+        help="set KEY in every run, e.g. --set nperiod=4; repeat for more",
+    )
+    lwrite.add_argument(
+        "--machine",
+        default="archer2",
+        help=f"the Slurm template to copy into the scan: {', '.join(scan.machines())}, "
+        "a file of your own, or none (default: archer2)",
+    )
+    lwrite.set_defaults(func=cmd_linear_write)
+
+    lsubmit = linear_sub.add_parser(
+        "submit", help="sbatch the runs without output or a job yet, through multigs2"
+    )
+    lsubmit.add_argument("directory", help="the linear scan directory")
+    lsubmit.add_argument(
+        "--jobs", type=int, default=1, help="how many jobs to share the runs between (default: 1)"
+    )
+    lsubmit.add_argument(
+        "--cores-per-run", type=int, default=4, help="cores for each run (default: 4)"
+    )
+    lsubmit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the sbatch commands without running them or changing anything",
+    )
+    lsubmit.add_argument(
+        "sbatch_args",
+        nargs="*",
+        metavar="-- SBATCH_ARGS",
+        help="options for sbatch, after --, e.g. -- --qos=short --time=00:20:00 --nodes=4",
+    )
+    lsubmit.set_defaults(func=cmd_linear_submit)
+
+    lstatus = linear_sub.add_parser("status", help="where each run of a linear scan has got to")
+    lstatus.add_argument("directory", help="the linear scan directory")
+    lstatus.set_defaults(func=cmd_linear_status)
+
+    lplot = linear_sub.add_parser("plot", help="draw the growth-rate spectra of linear runs")
+    lplot.add_argument(
+        "runs",
+        nargs="+",
+        help="run directories or .out.nc files, or a directory to search, such as a scan's",
+    )
+    lplot.add_argument(
+        "--vary",
+        default=None,
+        metavar="KEY",
+        help="draw a line for each value of KEY (default: the parameter a linear "
+        "scan given as its directory varies, if one)",
+    )
+    lplot.add_argument(
+        "--ignore",
+        nargs="+",
+        default=[],
+        metavar="KEY",
+        help="other input parameters the runs may differ in",
+    )
+    lplot.add_argument(
+        "--ky",
+        type=float,
+        default=None,
+        help="draw the eigenfunctions at this ky (default: each line's fastest-growing)",
+    )
+    lplot.add_argument(
+        "-o",
+        "--output-dir",
+        default=None,
+        help=f"directory for the figures (default: {DEFAULT_OUTPUT_DIR}/ in the "
+        "directory searched, or in the runs' common directory)",
+    )
+    lplot.add_argument(
+        "--no-data", action="store_true", help="save the figures only, without their data bundles"
+    )
+    lplot.add_argument(
+        "--require-clean",
+        action="store_true",
+        help="refuse unless gs2ew and GS2 were all built from clean, committed code",
+    )
+    _add_figure_options(lplot)
+    lplot.set_defaults(func=cmd_linear_plot)
 
     return parser
 

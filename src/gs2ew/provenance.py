@@ -13,6 +13,7 @@ metadata, and a missing record should never stop a plot being made.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import platform
@@ -253,6 +254,25 @@ def input_deck(ds: xr.Dataset, used: bool = False) -> str | None:
     return "\n".join(lines) + "\n"
 
 
+@functools.lru_cache(maxsize=4096)
+def _parse_deck(text: str) -> f90nml.Namelist:
+    return f90nml.reads(text)
+
+
+def input_decks(ds: xr.Dataset) -> list[f90nml.Namelist]:
+    """The input decks GS2 embedded in `ds`, parsed: as given, then with
+    every default filled in, as far as `ds` has them.
+
+    Parsed once for each deck and shared, so not to be changed.
+    """
+    found = []
+    for used in (False, True):
+        text = input_deck(ds, used=used)
+        if text is not None:
+            found.append(_parse_deck(text))
+    return found
+
+
 def _normalise_deck(text: str) -> list[str]:
     # GS2 stores each line in 200 characters, padded with spaces, and turns
     # each tab into a single space.
@@ -342,6 +362,7 @@ __all__ = [
     "gs2ew_version",
     "dependency_versions",
     "input_deck",
+    "input_decks",
     "deck_matches",
     "RESTART_KEYS",
     "deck_restarted",

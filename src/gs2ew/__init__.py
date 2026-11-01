@@ -20,6 +20,7 @@ Layout:
 * :mod:`gs2ew.style` — how figures look, and the formats they are saved in
 * :mod:`gs2ew.plots` — the plotting routines themselves
 * :mod:`gs2ew.scan` — writing, submitting and following parameter scans
+* :mod:`gs2ew.linear` — the same for linear scans, a spectrum for each point
 """
 
 from gs2ew.bundle import read_bundle, replot, reproduce
@@ -53,6 +54,17 @@ from gs2ew.plots.fields import (
     render_fields_by_mode,
     render_fields_time_traces,
     render_phi2_by_theta,
+)
+from gs2ew.plots.linear import (
+    compute_linear_gamma_max,
+    compute_linear_modes,
+    compute_linear_spectrum,
+    plot_linear_gamma_max,
+    plot_linear_modes,
+    plot_linear_spectrum,
+    render_linear_gamma_max,
+    render_linear_modes,
+    render_linear_spectrum,
 )
 from gs2ew.plots.transfer_spectral import (
     compute_transfer_spectral,
@@ -154,6 +166,16 @@ __all__ = [
     "render_fields_by_mode",
     "render_fields_time_traces",
     "render_phi2_by_theta",
+    # Linear runs
+    "compute_linear_gamma_max",
+    "compute_linear_modes",
+    "compute_linear_spectrum",
+    "plot_linear_gamma_max",
+    "plot_linear_modes",
+    "plot_linear_spectrum",
+    "render_linear_gamma_max",
+    "render_linear_modes",
+    "render_linear_spectrum",
     # Transfer
     "compute_transfer_butterfly",
     "compute_transfer_flux_surface",

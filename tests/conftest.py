@@ -249,6 +249,79 @@ def make_dataset(
     return xr.Dataset(data, coords=coords, attrs=attrs)
 
 
+def make_linear_dataset(
+    ky: float = 0.3,
+    beta: float = 0.0,
+    gamma: float = 0.2,
+    omega: float = 0.5,
+    t_end: float = 20.0,
+    max_sim_time: float = 100.0,
+    nperiod: int = 1,
+    fields: tuple[str, ...] = ("phi", "apar"),
+    run_id: str | None = None,
+) -> xr.Dataset:
+    """Build a synthetic single-ky linear run, as `gs2ew linear write` makes
+    them: its frequency settling on `omega` + i `gamma` by `t_end`, and a
+    ballooning eigenfunction, even in phi and odd in apar, along a domain of
+    `nperiod`."""
+    delt = 0.05
+    t = np.linspace(0.0, t_end, 11)
+    approach = 0.1 * np.exp(-t)
+    frequency = np.stack([omega + approach, gamma + approach], axis=-1).reshape(len(t), 1, 1, 2)
+    theta = np.linspace(-(2 * nperiod - 1) * np.pi, (2 * nperiod - 1) * np.pi, 16 * nperiod + 1)
+    envelope = np.exp(-(theta**2) / 4)
+    shapes = {
+        "phi": envelope * (2.0 + 1.0j) * 1e-3,
+        "apar": theta * envelope * (1.0 - 1.0j) * 1e-4,
+        "bpar": envelope * 1e-6 * (1.0 + 0.0j),
+    }
+    deck = f"""&knobs
+ beta = {beta}
+ delt = {delt}
+ nstep = 100000
+ max_sim_time = {max_sim_time}
+/
+
+&kt_grids_knobs
+ grid_option = 'single'
+/
+
+&kt_grids_single_parameters
+ aky = {ky}
+ theta0 = 0.0
+/
+
+&theta_grid_parameters
+ ntheta = 16
+ nperiod = {nperiod}
+/
+""".splitlines()
+    data = {
+        "omega_average": (
+            ("t", "ky", "kx", "ri"),
+            frequency,
+            {"units": "lref/vtref", "long_name": "Complex frequency averaged over navg timesteps"},
+        ),
+        "input_file": (("nlines", "char200"), char_array(deck)),
+        "used_input_file": (("nused_lines", "char200"), char_array(deck)),
+    }
+    for field in fields:
+        values = shapes[field]
+        data[field] = (
+            ("ky", "kx", "theta", "ri"),
+            np.stack([values.real, values.imag], axis=-1)[None, None],
+        )
+    coords = {
+        "t": t,
+        "ky": ("ky", [ky], {"units": "1/rho_r"}),
+        "kx": ("kx", [0.0]),
+        "theta": ("theta", theta, {"units": "rad"}),
+        "ri": [0, 1],
+    }
+    attrs = {"id": run_id or f"linear-{ky}-{beta}-{nperiod}"}
+    return xr.Dataset(data, coords=coords, attrs=attrs)
+
+
 @pytest.fixture
 def ds() -> xr.Dataset:
     """A synthetic dataset with all three fields and every diagnostic."""

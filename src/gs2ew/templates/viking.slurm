@@ -4,8 +4,13 @@
 #   sbatch --job-name=NAME viking.slurm INPUT.in
 #
 # GS2 writes its output beside INPUT.in, and its screen output goes to
-# screen_output.txt. Override the resources on the command line rather than
-# editing this file, e.g. `sbatch --ntasks=256 --time=02:00:00 ...`. For
+# screen_output.txt. Given a list of input files instead, one per line, it runs
+# them all through multigs2, N at a time, with screen output in RUNS.screen:
+#
+#   sbatch --job-name=NAME viking.slurm RUNS.list --nbatch N
+#
+# Override the resources on the command line rather than editing this
+# file, e.g. `sbatch --ntasks=256 --time=02:00:00 ...`. For
 # email when the job ends, add `--mail-user=ADDRESS`.
 
 #SBATCH --job-name=gs2
@@ -24,7 +29,13 @@
 GS2_EXEC="${GS2_EXEC:-$HOME/scratch/gk/gs2/bin/gs2}"
 GS2_ENV="${GS2_ENV:-$HOME/.gs2.sh}"
 
-input_file="${1:?usage: sbatch viking.slurm INPUT.in}"
+input_file="${1:?usage: sbatch viking.slurm INPUT.in, or RUNS.list --nbatch N}"
+program="$GS2_EXEC"
+screen=screen_output.txt
+if [[ "$input_file" == *.list ]]; then
+    program="${MULTIGS2_EXEC:-$(dirname "$GS2_EXEC")/multigs2}"
+    screen="${input_file%.list}.screen"
+fi
 
 source "$GS2_ENV"
 # After the modules, which can fail harmlessly. pipefail so a failed srun
@@ -32,4 +43,4 @@ source "$GS2_ENV"
 set -eo pipefail
 
 cd "$SLURM_SUBMIT_DIR"
-srun "$GS2_EXEC" "$input_file" | tee screen_output.txt
+srun "$program" "$@" | tee "$screen"
