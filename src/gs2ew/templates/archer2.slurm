@@ -4,8 +4,13 @@
 #   sbatch --job-name=NAME archer2.slurm INPUT.in
 #
 # GS2 writes its output beside INPUT.in, and its screen output goes to
-# screen_output.txt. Override the resources on the command line rather than
-# editing this file, e.g. `sbatch --nodes=2 --time=02:00:00 ...`.
+# screen_output.txt. Given a list of input files instead, one per line, it runs
+# them all through multigs2, N at a time, with screen output in RUNS.screen:
+#
+#   sbatch --job-name=NAME archer2.slurm RUNS.list --nbatch N
+#
+# Override the resources on the command line rather than editing this
+# file, e.g. `sbatch --nodes=2 --time=02:00:00 ...`.
 
 #SBATCH --job-name=gs2
 #SBATCH --output=%x-%j.log
@@ -26,7 +31,13 @@
 GS2_EXEC="${GS2_EXEC:-/work/e281/e281/bc1264/gk/gs2/bin/gs2}"
 GS2_ENV="${GS2_ENV:-/work/e281/e281/bc1264/.gs2.sh}"
 
-input_file="${1:?usage: sbatch archer2.slurm INPUT.in}"
+input_file="${1:?usage: sbatch archer2.slurm INPUT.in, or RUNS.list --nbatch N}"
+program="$GS2_EXEC"
+screen=screen_output.txt
+if [[ "$input_file" == *.list ]]; then
+    program="${MULTIGS2_EXEC:-$(dirname "$GS2_EXEC")/multigs2}"
+    screen="${input_file%.list}.screen"
+fi
 
 source "$GS2_ENV"
 # After the modules, which can fail harmlessly. pipefail so a failed srun
@@ -46,4 +57,4 @@ export SRUN_CPUS_PER_TASK=$SLURM_CPUS_PER_TASK
 
 cd "$SLURM_SUBMIT_DIR"
 srun --distribution=block:block --hint=nomultithread \
-    "$GS2_EXEC" "$input_file" | tee screen_output.txt
+    "$program" "$@" | tee "$screen"

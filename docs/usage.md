@@ -9,6 +9,7 @@ uv run gs2ew plot RUN --only transfer_theta transfer_summary
 uv run gs2ew plot RUN -o outputs/ --movies
 uv run gs2ew batch project/ --skip cbc       # every run under project/
 uv run gs2ew compare scan/ --vary ntheta     # runs that differ in one parameter
+uv run gs2ew linear plot lin/                # growth-rate spectra; see linear.md
 ```
 
 `RUN` is a run directory holding one `*.out.nc`, or the `*.out.nc` itself.
